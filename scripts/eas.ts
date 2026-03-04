@@ -28,7 +28,11 @@ import * as p from "@clack/prompts";
 import { resolve } from "path";
 import ignore from "ignore";
 
-const PROJECT_ROOT = new URL("..", import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1");
+// Tool's own directory (for .ssh-key/, plugins/, setup-tart.ts)
+const TOOL_ROOT = new URL("..", import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1");
+// Project being built (for .env, source files, logs) — when called from another
+// project (e.g. `bun eas-builder/scripts/eas.ts`), cwd is the project root.
+const PROJECT_ROOT = process.cwd();
 const IS_WINDOWS = process.platform === "win32";
 
 // Java version — shared between buildVmScript() PATH/JAVA_HOME and setup-tart.ts
@@ -143,7 +147,7 @@ function findCwrsyncSsh(): string {
   );
 }
 
-const SSH_KEY_DIR = resolve(PROJECT_ROOT, ".ssh-key");
+const SSH_KEY_DIR = resolve(TOOL_ROOT, ".ssh-key");
 const SSH_KEY_FILE = resolve(SSH_KEY_DIR, "id");
 
 /**
@@ -595,7 +599,7 @@ async function runRemoteBuild(profile: Profile, platform: Platform, interactive 
       }
     }
     p.log.info("Running Tart VM setup...");
-    const setupScript = resolve(PROJECT_ROOT, "scripts", "setup-tart.ts");
+    const setupScript = resolve(TOOL_ROOT, "scripts", "setup-tart.ts");
     const setupResult = spawnSync("bun", ["run", setupScript, "--embedded"], {
       stdio: "inherit",
       cwd: PROJECT_ROOT,

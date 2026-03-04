@@ -19,7 +19,8 @@ import { readFileSync, existsSync } from "fs";
 import { resolve } from "path";
 import * as p from "@clack/prompts";
 
-const PROJECT_ROOT = new URL("..", import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1");
+// Project being built — reads .env from cwd so it works when called from another project.
+const PROJECT_ROOT = process.cwd();
 
 // ---------------------------------------------------------------------------
 // Config

@@ -272,7 +272,39 @@ expo-builder/
 
 ## Integrating Into an Existing Project
 
-You can copy these files into your existing Expo project:
+### Option A: Git submodule (recommended)
+
+Add expo-builder as a submodule — no file duplication, updates via `git pull`:
+
+```bash
+cd your-project
+git submodule add https://github.com/defy-works/expo-builder.git eas-builder
+```
+
+Add to your `package.json`:
+```json
+{
+  "scripts": {
+    "eas": "bun run eas-builder/scripts/eas.ts"
+  }
+}
+```
+
+Add to your `.env`:
+```env
+PROJECT_NAME=my-app
+PROJECT_MOBILE_DIR=mobile
+REMOTE_BUILDER_USER=...
+REMOTE_BUILDER_HOST=...
+REMOTE_BUILDER_PATH=~/eas/my-app
+EXPO_TOKEN=...
+```
+
+The script reads `.env` from your project root (cwd), but resolves `.ssh-key/` and `setup-tart.ts` from the submodule directory.
+
+### Option B: Copy files
+
+Copy the scripts into your project directly:
 
 1. Copy `scripts/eas.ts`, `scripts/setup-tart.ts`, `plugins/withBuildOptimizations.js`
 2. Copy `.ssh-key/README.md` and create `.ssh-key/` directory

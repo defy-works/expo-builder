@@ -12,6 +12,17 @@ A reusable CLI tool that wraps EAS CLI with:
 - **OTA updates** — push JS bundle updates via EAS Update
 - **Local build + install** — build and install on connected device
 
+## TOOL_ROOT vs PROJECT_ROOT
+
+The scripts distinguish between two root directories:
+
+- **TOOL_ROOT** (`import.meta.url` → `scripts/..`) — where expo-builder itself lives. Used for tool-owned assets: `.ssh-key/id`, `scripts/setup-tart.ts`, `plugins/`.
+- **PROJECT_ROOT** (`process.cwd()`) — the project being built. Used for `.env`, source files, `logs/`, `.gitignore`, rsync root.
+
+**Standalone mode:** When you run `bun eas` from expo-builder's own directory, `TOOL_ROOT == PROJECT_ROOT == cwd`. No behavior change.
+
+**External project mode:** When another project calls `bun eas-builder/scripts/eas.ts` from its own root, `TOOL_ROOT` points to `eas-builder/` while `PROJECT_ROOT` is the calling project's directory.
+
 ## Architecture
 
 ```
