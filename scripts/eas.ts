@@ -60,6 +60,15 @@ function loadProjectConfig(): { name: string; mobileDir: string } {
 const PROJECT = loadProjectConfig();
 const MOBILE_DIR = PROJECT.mobileDir;
 
+function readCacheKey(profile: Profile): string | null {
+  const easJsonPath = resolve(MOBILE_DIR, "eas.json");
+  if (!existsSync(easJsonPath)) return null;
+  try {
+    const eas = JSON.parse(readFileSync(easJsonPath, "utf-8"));
+    return eas?.build?.[profile]?.cache?.key ?? null;
+  } catch { return null; }
+}
+
 type Command = "build" | "submit" | "deploy" | "update" | "run" | "back";
 type Profile = "development" | "preview" | "production";
 type Platform = "android" | "ios" | "all";
@@ -385,6 +394,7 @@ function buildVmScript(
   plat: "android" | "ios",
   submit: boolean,
   optimize: boolean,
+  cacheKey: string | null = null,
 ): string {
   const projectName = PROJECT.name;
   const mobileRel = resolve(MOBILE_DIR).replace(resolve(PROJECT_ROOT), "").replace(/\\/g, "/").replace(/^\//, "");
@@ -460,6 +470,31 @@ function buildVmScript(
     `export EXPO_TOKEN="${expoToken}"`,
     // Clean up leftover wrapper files from previous failed builds (pre-v1.1 approach)
     "[ -f _app.config.original.ts ] && mv _app.config.original.ts app.config.ts",
+    ...(cacheKey ? [
+      "",
+      "# Set up persistent build cache (symlinks to host-mounted dir)",
+      'echo "::phase::cache-setup"',
+      `CACHE_DIR="$HOME/project/.build-cache/${cacheKey}"`,
+      'mkdir -p "$CACHE_DIR/bun" "$CACHE_DIR/gradle-caches" "$CACHE_DIR/gradle-wrapper" "$CACHE_DIR/cocoapods"',
+      "",
+      "# Bun cache",
+      "mkdir -p ~/.bun/install",
+      'rm -rf ~/.bun/install/cache 2>/dev/null || true',
+      'ln -sfn "$CACHE_DIR/bun" ~/.bun/install/cache',
+      "",
+      "# Gradle (caches + wrapper only — gradle.properties stays local)",
+      "mkdir -p ~/.gradle",
+      'rm -rf ~/.gradle/caches ~/.gradle/wrapper 2>/dev/null || true',
+      'ln -sfn "$CACHE_DIR/gradle-caches" ~/.gradle/caches',
+      'ln -sfn "$CACHE_DIR/gradle-wrapper" ~/.gradle/wrapper',
+      "",
+      "# CocoaPods",
+      "mkdir -p ~/Library/Caches",
+      'rm -rf ~/Library/Caches/CocoaPods 2>/dev/null || true',
+      'ln -sfn "$CACHE_DIR/cocoapods" ~/Library/Caches/CocoaPods',
+      "",
+      '[ "$(ls -A "$CACHE_DIR/bun" 2>/dev/null)" ] || [ "$(ls -A "$CACHE_DIR/gradle-caches" 2>/dev/null)" ] && echo "::cache::hit" || echo "::cache::miss"',
+    ] : []),
     ...earlyOptimize,
     "",
     'echo "::phase::env-pull"',
@@ -507,7 +542,7 @@ function buildVmScript(
  * Build the shell script that runs on the Mac HOST.
  * Orchestrates the full Tart VM lifecycle: clone → boot → build → cleanup.
  */
-function buildMacHostScript(remotePath: string, vmScript: string, vmStateFile: string): string {
+function buildMacHostScript(remotePath: string, vmScript: string, vmStateFile: string, cacheKey: string | null = null): string {
   const projectName = PROJECT.name;
   // Escape any literal VMEOF in the VM script to prevent heredoc breakage
   const safeVmScript = vmScript.replace(/^VMEOF$/gm, "VM_EOF_ESCAPED");
@@ -524,7 +559,13 @@ for STALE in $(tart list --quiet 2>/dev/null | grep '^build-'); do
   tart delete "$STALE" 2>/dev/null || true
 done
 
-echo "::phase::clone-vm"
+${cacheKey ? `# Clean up orphaned build caches (old cache keys)
+if [ -d "${remotePath}/.build-cache" ]; then
+  for DIR in "${remotePath}/.build-cache"/*/; do
+    [ -d "$DIR" ] && [ "$(basename "$DIR")" != "${cacheKey}" ] && rm -rf "$DIR" && echo "::cache-cleanup::$(basename "$DIR")"
+  done
+fi
+` : ""}echo "::phase::clone-vm"
 tart clone eas-builder $VM
 
 # Allocate most of the Mac's resources to the VM (keep 2 cores + 4GB for host)
@@ -576,9 +617,10 @@ VMEOF
 // Remote build (Tart VM on Mac)
 // =============================================================================
 
-async function runRemoteBuild(profile: Profile, platform: Platform, interactive = false, submit = false, optimize = true) {
+async function runRemoteBuild(profile: Profile, platform: Platform, interactive = false, submit = false, optimize = true, noCache = false) {
   const remote = loadRemoteConfig();
   const sshTarget = `${remote.user}@${remote.host}`;
+  const cacheKey = noCache ? null : readCacheKey(profile);
 
   // --local requires one platform at a time
   const platforms: ("android" | "ios")[] =
@@ -709,7 +751,7 @@ async function runRemoteBuild(profile: Profile, platform: Platform, interactive 
   }
 
   // EAS requires a git repo — init one since .git was excluded from sync.
-  execFileSync("ssh", [sshTarget, `cd ${remote.path} && git init && git add -A && (git diff --cached --quiet || git commit -m "deploy" --no-gpg-sign)`], { stdio: "pipe" });
+  execFileSync("ssh", [sshTarget, `cd ${remote.path} && git init && echo '.build-cache/' >> .gitignore && git add -A && (git diff --cached --quiet || git commit -m "deploy" --no-gpg-sign)`], { stdio: "pipe" });
   s2b.stop("Project synced to Mac");
 
   // ── Step 3: Build in Tart VM ───────────────────────────────────────────
@@ -719,11 +761,11 @@ async function runRemoteBuild(profile: Profile, platform: Platform, interactive 
     const n = platforms.length > 1 ? ` [${i + 1}/${platforms.length}]` : "";
     p.log.step(`${action}: ${plat} (${profile})${n}`);
 
-    const vmScript = buildVmScript(remote.expoToken, profile, plat, submit, optimize);
+    const vmScript = buildVmScript(remote.expoToken, profile, plat, submit, optimize, cacheKey);
     const ts = Date.now();
     const scriptPath = `/tmp/${PROJECT.name}-build-${ts}-${i}.sh`;
     const vmStateFile = `/tmp/${PROJECT.name}-vm-${ts}-${i}`;
-    const macScript = buildMacHostScript(remote.path, vmScript, vmStateFile);
+    const macScript = buildMacHostScript(remote.path, vmScript, vmStateFile, cacheKey);
 
     // Write script to a temp file on the Mac, then execute it.
     // No PTY (-tt) — PTY puts the local terminal into raw mode which breaks
@@ -736,23 +778,25 @@ async function runRemoteBuild(profile: Profile, platform: Platform, interactive 
 
     // Phase labels for spinners — driven by ::phase:: markers in the scripts
     const phaseStart: Record<string, string> = {
-      "clone-vm": "Cloning VM...",
-      "boot-vm":  "Booting VM...",
-      "env-pull": "Pulling credentials from EAS...",
-      "install":  "Installing dependencies...",
-      "build":    `Building ${plat} (${profile})...`,
-      "version":  "Updating version...",
-      "submit":   "Submitting to store...",
-      "cleanup":  "Cleaning up VM...",
+      "clone-vm":    "Cloning VM...",
+      "boot-vm":     "Booting VM...",
+      "cache-setup": "Setting up build cache...",
+      "env-pull":    "Pulling credentials from EAS...",
+      "install":     "Installing dependencies...",
+      "build":       `Building ${plat} (${profile})...`,
+      "version":     "Updating version...",
+      "submit":      "Submitting to store...",
+      "cleanup":     "Cleaning up VM...",
     };
     const phaseDone: Record<string, string> = {
-      "clone-vm": "VM cloned",
-      "boot-vm":  "VM booted",
-      "env-pull": "Credentials ready",
-      "install":  "Dependencies installed",
-      "build":    `${plat} build complete`,
-      "version":  "Version updated",
-      "submit":   "Submitted to store",
+      "clone-vm":    "VM cloned",
+      "boot-vm":     "VM booted",
+      "cache-setup": "Build cache ready",
+      "env-pull":    "Credentials ready",
+      "install":     "Dependencies installed",
+      "build":       `${plat} build complete`,
+      "version":     "Version updated",
+      "submit":      "Submitted to store",
       "cleanup":  "VM cleaned up",
     };
 
@@ -854,6 +898,12 @@ async function runRemoteBuild(profile: Profile, platform: Platform, interactive 
 
         const stale = line.match(/^::stale::(.+)$/);
         if (stale) { showLine(`Cleaning up stale VM: ${stale[1]}`); return; }
+
+        const cache = line.match(/^::cache::(hit|miss)$/);
+        if (cache) { showLine(`Cache: ${cache[1] === "hit" ? "warm" : "cold (first build with this key)"}`); return; }
+
+        const cacheClean = line.match(/^::cache-cleanup::(.+)$/);
+        if (cacheClean) { showLine(`Removing old cache: ${cacheClean[1]}`); return; }
 
         const err = line.match(/^::error::(.+)$/);
         if (err) {
@@ -985,7 +1035,7 @@ async function runRemoteBuild(profile: Profile, platform: Platform, interactive 
   }
 }
 
-async function runRemoteDeploy(profile: Profile, platform: Platform, interactive = false, optimize = true) {
+async function runRemoteDeploy(profile: Profile, platform: Platform, interactive = false, optimize = true, noCache = false) {
   if (profile === "development") {
     throw new CommandError(
       "Cannot deploy development builds — they use internal distribution (APK) which stores reject.\n" +
@@ -994,7 +1044,7 @@ async function runRemoteDeploy(profile: Profile, platform: Platform, interactive
   }
 
   // Build + submit inside the Tart VM (submit=true)
-  await runRemoteBuild(profile, platform, interactive, /* submit */ true, optimize);
+  await runRemoteBuild(profile, platform, interactive, /* submit */ true, optimize, noCache);
 }
 
 // =============================================================================
@@ -1378,6 +1428,7 @@ async function mainInner() {
   const { command } = parsed;
   const remote = parsed.rest.includes("--remote");
   const optimize = !parsed.rest.includes("--no-optimize");
+  const noCache = parsed.rest.includes("--no-cache");
 
   if (command === "run") {
     const platform = parsed.platform as "android" | "ios" | undefined;
@@ -1387,7 +1438,7 @@ async function mainInner() {
     runLocal(platform);
   } else if (command === "build") {
     if (remote) {
-      await runRemoteBuild(parsed.profile ?? "development", parsed.platform ?? "all", false, false, optimize);
+      await runRemoteBuild(parsed.profile ?? "development", parsed.platform ?? "all", false, false, optimize, noCache);
     } else {
       runBuild(parsed.profile ?? "development", parsed.platform ?? "all");
     }
@@ -1395,7 +1446,7 @@ async function mainInner() {
     runSubmit(parsed.profile ?? "preview", parsed.platform ?? "all");
   } else if (command === "deploy") {
     if (remote) {
-      await runRemoteDeploy(parsed.profile ?? "preview", parsed.platform ?? "all", false, optimize);
+      await runRemoteDeploy(parsed.profile ?? "preview", parsed.platform ?? "all", false, optimize, noCache);
     } else {
       runDeploy(parsed.profile ?? "preview", parsed.platform ?? "all");
     }

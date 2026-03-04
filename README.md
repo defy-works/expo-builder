@@ -167,6 +167,40 @@ bun eas run ios
 |------|-------------|
 | `--remote` | Build in Tart VM on your Mac instead of EAS Cloud |
 | `--no-optimize` | Skip build optimizations (useful for debugging build issues) |
+| `--no-cache` | Skip persistent build cache (force fresh dependency downloads) |
+
+## Persistent Build Cache
+
+When your `eas.json` build profile includes a `cache.key`, dependency caches persist between remote builds — significantly reducing `bun install`, Gradle, and CocoaPods download times.
+
+```json
+{
+  "build": {
+    "preview": {
+      "cache": { "key": "v4" }
+    }
+  }
+}
+```
+
+### How it works
+
+Caches are stored at `REMOTE_BUILDER_PATH/.build-cache/<key>/` on the Mac host. This directory persists between builds (it's outside the ephemeral VM). Inside the VM, standard cache locations are symlinked to the persistent storage via the existing VirtioFS mount:
+
+| Cache | VM path | What's cached |
+|-------|---------|---------------|
+| Bun | `~/.bun/install/cache` | Downloaded packages |
+| Gradle caches | `~/.gradle/caches` | Downloaded deps + build cache |
+| Gradle wrapper | `~/.gradle/wrapper` | Gradle distributions |
+| CocoaPods | `~/Library/Caches/CocoaPods` | Pod specs + downloads |
+
+### Cache invalidation
+
+Bump `cache.key` in `eas.json` (e.g., `"v4"` → `"v5"`). Old cache directories are cleaned up automatically on the next build.
+
+To skip caching entirely for a single build: `bun eas build preview ios --remote --no-cache`
+
+If no `cache.key` exists in your `eas.json`, builds run without caching (same behavior as before).
 
 ## Build Optimizations
 

@@ -153,6 +153,18 @@ The Mac host script dynamically allocates CPU and memory to the VM:
 - CPU: total cores - 2 (minimum: all cores if ≤ 4)
 - Memory: total MB - 4096 (minimum: all memory if ≤ 8GB)
 
+### Persistent Build Cache
+When the build profile in `eas.json` has a `cache.key` (e.g., `"v4"`), dependency caches persist across builds at `REMOTE_BUILDER_PATH/.build-cache/<key>/` on the Mac host. Inside the VM, standard cache directories are symlinked to this persistent storage via the existing VirtioFS mount.
+
+What's cached:
+- **Bun** — `~/.bun/install/cache` (package downloads)
+- **Gradle** — `~/.gradle/caches` (downloaded deps, build cache) + `~/.gradle/wrapper` (Gradle distributions)
+- **CocoaPods** — `~/Library/Caches/CocoaPods`
+
+Cache invalidation: bump `cache.key` in `eas.json` (e.g., `"v4"` → `"v5"`). Old keys are cleaned up automatically on the next build.
+
+Skip with `--no-cache` flag. If no `cache.key` exists in `eas.json`, builds run without caching (no change from previous behavior).
+
 ### Build Optimizations (opt-in via `--no-optimize` to disable)
 - **Android**: Dynamic JVM memory (`RAM - 2GB`), `MaxMetaspaceSize=512m`, `workers.max=2`, disable `lintVital` tasks via init.gradle
 - **iOS**: Disable Xcode index store, skip dSYM for non-production (via config plugin, auto-injected)
