@@ -514,14 +514,23 @@ function buildVmScript(
     `CUR=$(echo "$VERSION_JSON" | bun -e "const d=JSON.parse(await Bun.stdin.text()); process.stdout.write(String(d.${versionField}??0))")`,
     "NEXT=$((CUR + 1))",
     'echo "::version::$CUR → $NEXT"',
-    // EAS CLI v18+ uses @clack/prompts which checks stdin.isTTY — piped input
-    // no longer works. Use expect (ships with macOS) to automate the prompt.
-    // Unquoted heredoc so bash expands $NEXT; Tcl variables are escaped.
+    // EAS CLI v18+ wraps the `prompts` npm library which checks stdin.isTTY —
+    // piped input no longer works. Use expect (ships with macOS) to automate
+    // the interactive prompt. The prompt text is "What version would you like
+    // to set?" — we match "*would you like*" to avoid premature match on the
+    // "Proceeding with outdated version." update notice. `prompts` uses raw
+    // mode, so Enter = \r. Unquoted heredoc: bash expands $NEXT, Tcl vars escaped.
     'expect << VEOF || echo "::error::Version increment failed"',
+    "set timeout 30",
     `spawn eas build:version:set -p ${plat} --profile ${profile}`,
-    'expect "*version*"',
-    'send "$NEXT\\r"',
-    "expect eof",
+    "expect {",
+    '  "*would you like*" { send \\"$NEXT\\\\r\\" }',
+    "  timeout { exit 1 }",
+    "}",
+    "expect {",
+    "  eof {}",
+    "  timeout { exit 1 }",
+    "}",
     "lassign [wait] pid spawnid os_error value",
     "exit \\$value",
     "VEOF",
