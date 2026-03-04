@@ -93,15 +93,7 @@ Copy `.env.example` to `.env` and fill in. Key fields:
 
 Place your SSH private key at `.ssh-key/id` and set permissions (`chmod 600` on macOS/Linux, `icacls` on Windows). See `.ssh-key/README.md`.
 
-### 3. Setup Tart VM
-
-```bash
-bun run eas-builder/scripts/setup-tart.ts
-```
-
-SSHes into the Mac and installs Tart, pulls a macOS+Xcode VM image, installs build dependencies. One-time, 30–60 minutes.
-
-### 4. Install Dependencies
+### 3. Install Dependencies
 
 ```bash
 cd eas-builder && bun install

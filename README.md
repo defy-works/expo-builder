@@ -127,28 +127,7 @@ chmod 600 eas-builder/.ssh-key/id
 
 The key must match an entry in `~/.ssh/authorized_keys` on the Mac.
 
-### 4. Set up the Tart VM
-
-```bash
-bun run eas-builder/scripts/setup-tart.ts
-```
-
-This connects to your Mac via SSH and:
-1. Installs [Tart](https://tart.run/) via Homebrew
-2. Pulls a macOS + Xcode VM image (~25GB download)
-3. Clones it as `eas-builder` (~70GB disk)
-4. Boots the VM, sets up passwordless SSH (Mac → VM)
-5. Installs build tools inside the VM:
-   - Xcode license + first launch
-   - Bun, Node.js, Java 17
-   - Android SDK (cmdline-tools, platform 36, build-tools, NDK)
-   - CocoaPods, Fastlane
-   - eas-cli, dotenv-cli
-6. Stops the VM — image is ready
-
-This takes 30–60 minutes (mostly downloading). You only need to do it once.
-
-### 5. Build
+### 4. Build
 
 ```bash
 # Interactive — walks you through every option
@@ -314,7 +293,7 @@ Check that `.ssh-key/id` has `600` permissions: `ls -la eas-builder/.ssh-key/id`
 The Mac may not have enough resources. Check that no other VMs are running: `ssh user@mac "tart list"`.
 
 ### "Tart VM not set up"
-Run `bun run eas-builder/scripts/setup-tart.ts` first. This creates the `eas-builder` base image on the Mac.
+Run `bun eas build --remote` — it will prompt to run setup automatically. Or run `bun run eas-builder/scripts/setup-tart.ts` directly.
 
 ### Gradle OOM during Android build
 This is why optimizations are on by default. If you're still hitting OOM, your Mac may not have enough RAM. The script allocates `(total RAM - 4GB)` to the VM. 8GB minimum recommended, 16GB+ preferred.
