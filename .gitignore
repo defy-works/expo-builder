@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Temp (build scripts)
+.temp/
+
+# SSH key for remote Mac builds (README.md is tracked)
+.ssh-key/*
+!.ssh-key/README.md
+
+# Build logs
+logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+nul

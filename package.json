@@ -1,0 +1,16 @@
+{
+  "name": "expo-builder",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "eas": "bun run scripts/eas.ts",
+    "setup": "bun run scripts/setup-tart.ts"
+  },
+  "devDependencies": {
+    "@clack/prompts": "^1.0.1",
+    "@types/bun": "^1.3.9",
+    "@types/node": "^25.2.3",
+    "ignore": "^7.0.5",
+    "typescript": "~5.9.0"
+  }
+}
