@@ -84,8 +84,12 @@ Edit `.env`:
 # Your project name (used for VM mount, temp files, CLI label)
 PROJECT_NAME=my-app
 
-# Path to your Expo project relative to this directory
-# Use "." if this IS your Expo project, or "mobile" if it's in a subdirectory
+# Path to the project root, relative to this directory
+# Use "." if this IS the project, or ".." if used as a submodule
+PROJECT_ROOT=.
+
+# Path to the Expo project, relative to PROJECT_ROOT
+# Use "." if the project root IS the Expo project, or "mobile" for a subdirectory
 PROJECT_MOBILE_DIR=.
 
 # SSH credentials for the Mac
@@ -206,7 +210,7 @@ Applied via an Expo config plugin (`plugins/withBuildOptimizations.js`):
 - **Index store disabled**: `COMPILER_INDEX_STORE_ENABLE=NO` (IDE-only feature)
 - **dSYM skipped**: `DEBUG_INFORMATION_FORMAT=dwarf` for non-production (faster, less memory)
 
-To use the iOS plugin, add it conditionally in your `app.config.ts`:
+The plugin is **automatically copied** from expo-builder to the project's `plugins/` directory on the Mac during remote builds. You just need the conditional include in your `app.config.ts`:
 
 ```ts
 plugins: [
@@ -290,17 +294,18 @@ Add to your `package.json`:
 }
 ```
 
-Add to your `.env`:
+Create `eas-builder/.env` (all config lives in the submodule directory):
 ```env
 PROJECT_NAME=my-app
-PROJECT_MOBILE_DIR=mobile
+PROJECT_ROOT=..              # points to the parent project
+PROJECT_MOBILE_DIR=mobile    # relative to PROJECT_ROOT
 REMOTE_BUILDER_USER=...
 REMOTE_BUILDER_HOST=...
 REMOTE_BUILDER_PATH=~/eas/my-app
 EXPO_TOKEN=...
 ```
 
-The script reads `.env` from your project root (cwd), but resolves `.ssh-key/` and `setup-tart.ts` from the submodule directory.
+The script reads `.env`, `.ssh-key/`, and `plugins/` from its own directory (TOOL_ROOT). Source files, logs, and `.gitignore` come from PROJECT_ROOT (the parent project).
 
 ### Option B: Copy files
 

@@ -28,27 +28,32 @@ import * as p from "@clack/prompts";
 import { resolve } from "path";
 import ignore from "ignore";
 
-// Tool's own directory (for .ssh-key/, plugins/, setup-tart.ts)
+// Tool's own directory (for .ssh-key/, plugins/, setup-tart.ts, .env)
 const TOOL_ROOT = new URL("..", import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1");
-// Project being built (for .env, source files, logs) — when called from another
-// project (e.g. `bun eas-builder/scripts/eas.ts`), cwd is the project root.
-const PROJECT_ROOT = process.cwd();
 const IS_WINDOWS = process.platform === "win32";
 
 // Java version — shared between buildVmScript() PATH/JAVA_HOME and setup-tart.ts
 const JAVA_VERSION = "17";
 
-// Project config — loaded from .env
-function loadProjectConfig(): { name: string; mobileDir: string } {
-  const envPath = resolve(PROJECT_ROOT, ".env");
-  if (!existsSync(envPath)) return { name: "app", mobileDir: PROJECT_ROOT };
+// Parse .env from TOOL_ROOT — all config lives alongside the tool
+function loadEnv(): (key: string) => string {
+  const envPath = resolve(TOOL_ROOT, ".env");
+  if (!existsSync(envPath)) return () => "";
   const env = readFileSync(envPath, "utf-8");
-  const get = (key: string): string => {
+  return (key: string) => {
     const match = env.match(new RegExp(`^${key}=(.+)$`, "m"));
     return match?.[1]?.trim() ?? "";
   };
-  const name = get("PROJECT_NAME") || "app";
-  const mobileDirRel = get("PROJECT_MOBILE_DIR") || ".";
+}
+const ENV = loadEnv();
+
+// Project being built — defaults to TOOL_ROOT itself (standalone mode)
+const PROJECT_ROOT = resolve(TOOL_ROOT, ENV("PROJECT_ROOT") || ".");
+
+// Project config
+function loadProjectConfig(): { name: string; mobileDir: string } {
+  const name = ENV("PROJECT_NAME") || "app";
+  const mobileDirRel = ENV("PROJECT_MOBILE_DIR") || ".";
   return { name, mobileDir: resolve(PROJECT_ROOT, mobileDirRel) };
 }
 
@@ -216,22 +221,10 @@ interface RemoteConfig {
 }
 
 function loadRemoteConfig(): RemoteConfig {
-  const envPath = resolve(PROJECT_ROOT, ".env");
-  if (!existsSync(envPath)) {
-    throw new CommandError(
-      ".env not found at project root. Cannot load remote builder config."
-    );
-  }
-  const env = readFileSync(envPath, "utf-8");
-  const get = (key: string): string => {
-    const match = env.match(new RegExp(`^${key}=(.+)$`, "m"));
-    return match?.[1]?.trim() ?? "";
-  };
-
-  const user = get("REMOTE_BUILDER_USER");
-  const host = get("REMOTE_BUILDER_HOST");
-  const remotePath = get("REMOTE_BUILDER_PATH");
-  const expoToken = get("EXPO_TOKEN");
+  const user = ENV("REMOTE_BUILDER_USER");
+  const host = ENV("REMOTE_BUILDER_HOST");
+  const remotePath = ENV("REMOTE_BUILDER_PATH");
+  const expoToken = ENV("EXPO_TOKEN");
 
   if (!user || !host || !remotePath) {
     throw new CommandError(
@@ -664,6 +657,22 @@ async function runRemoteBuild(profile: Profile, platform: Platform, interactive 
       "rsync",
       rsyncResult.status ?? 1,
     );
+  }
+
+  // Copy build optimizations plugin from tool directory if optimize is enabled
+  if (optimize) {
+    const pluginSrc = resolve(TOOL_ROOT, "plugins", "withBuildOptimizations.js");
+    if (existsSync(pluginSrc)) {
+      const mobileRel = resolve(MOBILE_DIR).replace(resolve(PROJECT_ROOT), "").replace(/\\/g, "/").replace(/^\//, "");
+      const pluginDest = mobileRel
+        ? `${remote.path}/${mobileRel}/plugins/withBuildOptimizations.js`
+        : `${remote.path}/plugins/withBuildOptimizations.js`;
+      spawnSync("ssh", [sshTarget, `mkdir -p "$(dirname ${pluginDest})"`], { stdio: "pipe" });
+      spawnSync("ssh", [sshTarget, `cat > ${pluginDest}`], {
+        stdio: ["pipe", "pipe", "pipe"],
+        input: readFileSync(pluginSrc, "utf-8"),
+      });
+    }
   }
 
   // EAS requires a git repo — init one since .git was excluded from sync.

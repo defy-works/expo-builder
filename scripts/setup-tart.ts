@@ -19,8 +19,8 @@ import { readFileSync, existsSync } from "fs";
 import { resolve } from "path";
 import * as p from "@clack/prompts";
 
-// Project being built — reads .env from cwd so it works when called from another project.
-const PROJECT_ROOT = process.cwd();
+// Tool's own directory — reads .env from where setup-tart.ts lives
+const TOOL_ROOT = new URL("..", import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1");
 
 // ---------------------------------------------------------------------------
 // Config
@@ -39,9 +39,9 @@ interface SetupConfig {
 }
 
 function loadConfig(): SetupConfig {
-  const envPath = resolve(PROJECT_ROOT, ".env");
+  const envPath = resolve(TOOL_ROOT, ".env");
   if (!existsSync(envPath)) {
-    throw new Error(".env not found at project root.");
+    throw new Error(`.env not found at ${TOOL_ROOT}`);
   }
   const env = readFileSync(envPath, "utf-8");
   const get = (key: string): string => {

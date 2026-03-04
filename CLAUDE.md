@@ -16,12 +16,14 @@ A reusable CLI tool that wraps EAS CLI with:
 
 The scripts distinguish between two root directories:
 
-- **TOOL_ROOT** (`import.meta.url` → `scripts/..`) — where expo-builder itself lives. Used for tool-owned assets: `.ssh-key/id`, `scripts/setup-tart.ts`, `plugins/`.
-- **PROJECT_ROOT** (`process.cwd()`) — the project being built. Used for `.env`, source files, `logs/`, `.gitignore`, rsync root.
+- **TOOL_ROOT** (`import.meta.url` → `scripts/..`) — where expo-builder itself lives. Used for tool-owned assets: `.ssh-key/id`, `scripts/setup-tart.ts`, `plugins/`, and `.env`.
+- **PROJECT_ROOT** (from `.env` `PROJECT_ROOT`, resolved relative to TOOL_ROOT) — the project being built. Used for source files, `logs/`, `.gitignore`, rsync root.
 
-**Standalone mode:** When you run `bun eas` from expo-builder's own directory, `TOOL_ROOT == PROJECT_ROOT == cwd`. No behavior change.
+**All config lives in `TOOL_ROOT/.env`** — project name, mobile dir, remote builder credentials, Expo token. This is true for both standalone and submodule usage.
 
-**External project mode:** When another project calls `bun eas-builder/scripts/eas.ts` from its own root, `TOOL_ROOT` points to `eas-builder/` while `PROJECT_ROOT` is the calling project's directory.
+**Standalone mode:** `PROJECT_ROOT=.` in `.env` → TOOL_ROOT == PROJECT_ROOT. Default behavior.
+
+**Submodule mode:** `PROJECT_ROOT=..` in `.env` → PROJECT_ROOT is the parent project. The tool reads its own `.env` but builds the parent project's source tree.
 
 ## Architecture
 
@@ -142,7 +144,9 @@ PROJECT_MOBILE_DIR=mobile
 
 ### iOS Build Optimizations Plugin
 
-To use the iOS config plugin (`plugins/withBuildOptimizations.js`), add it conditionally in your `app.config.ts`:
+The iOS config plugin (`plugins/withBuildOptimizations.js`) is automatically copied from expo-builder to the project's `plugins/` directory on the Mac during remote builds when optimizations are enabled. No manual copy needed.
+
+Your `app.config.ts` must conditionally include it:
 
 ```ts
 plugins: [
