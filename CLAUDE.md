@@ -1,6 +1,8 @@
 # expo-builder
 
-Standalone build system for Expo/React Native projects. Builds iOS and Android apps in ephemeral Tart VMs on a remote Mac via SSH from any OS (Windows, macOS, or Linux).
+Build system for Expo/React Native projects. Builds iOS and Android apps in ephemeral Tart VMs on a remote Mac via SSH from any OS (Windows, macOS, or Linux).
+
+Installed as a git submodule (`eas-builder/`) inside the host project. Can also be copied manually (see README "Manual Installation").
 
 ## What This Is
 
@@ -14,16 +16,10 @@ A reusable CLI tool that wraps EAS CLI with:
 
 ## TOOL_ROOT vs PROJECT_ROOT
 
-The scripts distinguish between two root directories:
+- **TOOL_ROOT** (`import.meta.url` → `scripts/..`) — where expo-builder itself lives. Used for: `.ssh-key/id`, `scripts/setup-tart.ts`, `plugins/`, and `.env`.
+- **PROJECT_ROOT** (`.env` → `PROJECT_ROOT`, resolved relative to TOOL_ROOT) — the project being built. Used for: source files, `logs/`, `.gitignore`, rsync root.
 
-- **TOOL_ROOT** (`import.meta.url` → `scripts/..`) — where expo-builder itself lives. Used for tool-owned assets: `.ssh-key/id`, `scripts/setup-tart.ts`, `plugins/`, and `.env`.
-- **PROJECT_ROOT** (from `.env` `PROJECT_ROOT`, resolved relative to TOOL_ROOT) — the project being built. Used for source files, `logs/`, `.gitignore`, rsync root.
-
-**All config lives in `TOOL_ROOT/.env`** — project name, mobile dir, remote builder credentials, Expo token. This is true for both standalone and submodule usage.
-
-**Standalone mode:** `PROJECT_ROOT=.` in `.env` → TOOL_ROOT == PROJECT_ROOT. Default behavior.
-
-**Submodule mode:** `PROJECT_ROOT=..` in `.env` → PROJECT_ROOT is the parent project. The tool reads its own `.env` but builds the parent project's source tree.
+All config lives in `TOOL_ROOT/.env`. `PROJECT_ROOT` is a relative path in that `.env` — typically `..` (submodule pointing to parent) or `.` (manual install where tool IS the project).
 
 ## Architecture
 
@@ -50,22 +46,23 @@ Each build gets a fresh clone of a pre-configured VM image. No state carries ove
 ## Files
 
 ```
-expo-builder/
-├── CLAUDE.md                    # This file
-├── LICENSE                      # MIT license
-├── README.md                    # User-facing documentation
-├── .env.example                 # Configuration template
+eas-builder/                         # submodule in host project
+├── CLAUDE.md                        # This file
+├── README.md                        # User-facing documentation
+├── .env.example                     # Configuration template
+├── .env                             # Config (gitignored)
 ├── .gitignore
-├── package.json                 # Dependencies (@clack/prompts, ignore)
-├── tsconfig.json                # TypeScript config (IDE support)
+├── package.json                     # Dependencies (@clack/prompts, ignore)
+├── tsconfig.json                    # TypeScript config (IDE support)
+├── LICENSE                          # MIT license
 ├── scripts/
-│   ├── eas.ts                   # Main CLI — build, submit, deploy, update, run
-│   └── setup-tart.ts            # One-time Tart VM setup on remote Mac
+│   ├── eas.ts                       # Main CLI — build, submit, deploy, update, run
+│   └── setup-tart.ts                # One-time Tart VM setup on remote Mac
 ├── plugins/
-│   └── withBuildOptimizations.js # Expo config plugin for iOS build optimizations
+│   └── withBuildOptimizations.js     # iOS config plugin (auto-injected at build time)
 └── .ssh-key/
-    ├── README.md                # SSH key setup instructions
-    └── id                       # SSH private key (gitignored)
+    ├── README.md                    # SSH key setup instructions
+    └── id                           # SSH private key (gitignored)
 ```
 
 ## Setup
@@ -80,16 +77,17 @@ expo-builder/
 
 ### 1. Configure
 
-Copy `.env.example` to `.env` and fill in:
+Copy `.env.example` to `.env` and fill in. Key fields:
 
-```env
-PROJECT_NAME=my-app              # Used for VM mount name, temp files, intro label
-PROJECT_MOBILE_DIR=.             # Relative path to Expo project (default: project root)
-REMOTE_BUILDER_USER=user         # SSH username for Mac
-REMOTE_BUILDER_HOST=192.168.1.x  # SSH host for Mac
-REMOTE_BUILDER_PATH=~/eas/my-app # Remote directory on Mac
-EXPO_TOKEN=expo_xxx              # From expo.dev → Account Settings → Access Tokens
-```
+| Field | Description | Example |
+|-------|-------------|---------|
+| `PROJECT_NAME` | VM mount name, temp file prefix, CLI label | `my-app` |
+| `PROJECT_ROOT` | Path to host project, relative to this dir | `..` |
+| `PROJECT_MOBILE_DIR` | Expo project path, relative to PROJECT_ROOT | `mobile` or `.` |
+| `REMOTE_BUILDER_USER` | SSH username for Mac | `john` |
+| `REMOTE_BUILDER_HOST` | SSH host for Mac | `192.168.1.50` |
+| `REMOTE_BUILDER_PATH` | Working directory on Mac | `~/eas/my-app` |
+| `EXPO_TOKEN` | EAS CLI auth token | `expo_xxx` |
 
 ### 2. SSH Key
 
@@ -98,15 +96,15 @@ Place your SSH private key at `.ssh-key/id` and set permissions (`chmod 600` on 
 ### 3. Setup Tart VM
 
 ```bash
-bun run setup
+bun run eas-builder/scripts/setup-tart.ts
 ```
 
-This SSHes into the Mac and installs Tart, pulls a macOS+Xcode VM image, and installs build dependencies (bun, node, Java 17, Android SDK, CocoaPods, Fastlane, eas-cli).
+SSHes into the Mac and installs Tart, pulls a macOS+Xcode VM image, installs build dependencies. One-time, 30–60 minutes.
 
 ### 4. Install Dependencies
 
 ```bash
-bun install
+cd eas-builder && bun install
 ```
 
 ## Usage
@@ -128,21 +126,7 @@ bun eas run android                       # Local build + install
 --no-optimize   # Skip build optimizations (Gradle tuning, iOS dSYM skip)
 ```
 
-## Integration with Your Expo Project
-
-This tool is designed to live **alongside** your Expo project, or as a separate repo that syncs files to the Mac.
-
-### If your project root IS the Expo project:
-```env
-PROJECT_MOBILE_DIR=.
-```
-
-### If your Expo project is in a subdirectory (e.g., `mobile/`):
-```env
-PROJECT_MOBILE_DIR=mobile
-```
-
-### iOS Build Optimizations Plugin
+## iOS Build Optimizations Plugin
 
 Fully automatic — no changes needed in the project's `app.config.ts`.
 
@@ -179,7 +163,7 @@ The Mac host script dynamically allocates CPU and memory to the VM:
 
 ### Build Optimizations (opt-in via `--no-optimize` to disable)
 - **Android**: Dynamic JVM memory (`RAM - 2GB`), `MaxMetaspaceSize=512m`, `workers.max=2`, disable `lintVital` tasks via init.gradle
-- **iOS**: Disable Xcode index store, skip dSYM for non-production (via config plugin)
+- **iOS**: Disable Xcode index store, skip dSYM for non-production (via config plugin, auto-injected)
 
 ### Logs
 All build output is saved to `logs/<platform>-<profile>-<timestamp>.log` for debugging. The console shows filtered, deduplicated output with `│` bar formatting.

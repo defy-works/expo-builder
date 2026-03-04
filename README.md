@@ -56,41 +56,47 @@ bun eas build --remote
 ### On the Remote Mac
 - Apple Silicon (M1/M2/M3/M4) — required for Tart's Virtualization.framework
 - [Homebrew](https://brew.sh/) — the setup script installs everything else
-- SSH access — your Windows machine must be able to `ssh user@mac`
+- SSH access — your machine must be able to `ssh user@mac`
 
 ### Expo
 - An [Expo](https://expo.dev/) account
 - An access token — create at expo.dev → Account Settings → Access Tokens
 - Your project should use EAS Build (i.e., have an `eas.json`)
 
-## Quick Start
+## Setup
 
-### 1. Install dependencies
+### 1. Add to your project
 
 ```bash
-cd expo-builder
-bun install
+git submodule add https://github.com/defy-works/expo-builder.git eas-builder
+```
+
+Add a script to your `package.json`:
+```json
+{
+  "scripts": {
+    "eas": "bun run eas-builder/scripts/eas.ts"
+  }
+}
 ```
 
 ### 2. Configure
 
 ```bash
-cp .env.example .env
+cp eas-builder/.env.example eas-builder/.env
 ```
 
-Edit `.env`:
+Edit `eas-builder/.env`:
 
 ```env
-# Your project name (used for VM mount, temp files, CLI label)
 PROJECT_NAME=my-app
 
-# Path to the project root, relative to this directory
-# Use "." if this IS the project, or ".." if used as a submodule
-PROJECT_ROOT=.
+# Path to your project root, relative to this directory
+PROJECT_ROOT=..
 
 # Path to the Expo project, relative to PROJECT_ROOT
-# Use "." if the project root IS the Expo project, or "mobile" for a subdirectory
-PROJECT_MOBILE_DIR=.
+# Use "." if the project root IS the Expo project
+PROJECT_MOBILE_DIR=mobile
 
 # SSH credentials for the Mac
 REMOTE_BUILDER_USER=john
@@ -101,23 +107,22 @@ REMOTE_BUILDER_PATH=~/eas/my-app
 EXPO_TOKEN=expo_xxxxxxxxxxxxx
 ```
 
-### 3. Set up SSH key for rsync
+### 3. SSH key
 
 rsync needs a key file (it can't use the SSH agent on all platforms).
 
 ```bash
-# Copy your private key
-cp ~/.ssh/id_ed25519 .ssh-key/id
+cp ~/.ssh/id_ed25519 eas-builder/.ssh-key/id
 ```
 
 Lock down permissions:
 
 ```bash
 # Windows (cwRsync rejects keys that are too open)
-icacls .ssh-key\id /inheritance:r /grant:r "%USERNAME%:R"
+icacls eas-builder\.ssh-key\id /inheritance:r /grant:r "%USERNAME%:R"
 
 # macOS / Linux
-chmod 600 .ssh-key/id
+chmod 600 eas-builder/.ssh-key/id
 ```
 
 The key must match an entry in `~/.ssh/authorized_keys` on the Mac.
@@ -125,7 +130,7 @@ The key must match an entry in `~/.ssh/authorized_keys` on the Mac.
 ### 4. Set up the Tart VM
 
 ```bash
-bun run setup
+bun run eas-builder/scripts/setup-tart.ts
 ```
 
 This connects to your Mac via SSH and:
@@ -248,63 +253,27 @@ The terminal shows filtered, deduplicated output with progress spinners. Check t
 ## Project Structure
 
 ```
-expo-builder/
+eas-builder/                       # submodule in your project
 ├── scripts/
-│   ├── eas.ts                   # Main CLI entry point
-│   └── setup-tart.ts            # One-time VM setup
+│   ├── eas.ts                     # Main CLI entry point
+│   └── setup-tart.ts              # One-time VM setup
 ├── plugins/
-│   └── withBuildOptimizations.js # iOS Xcode config plugin (optional)
+│   └── withBuildOptimizations.js   # iOS Xcode config plugin (auto-injected)
 ├── .ssh-key/
-│   ├── id                       # Your SSH private key (gitignored)
+│   ├── id                         # Your SSH private key (gitignored)
 │   └── README.md
-├── .env                         # Your config (gitignored)
-├── .env.example                 # Config template
-├── .gitignore
-├── package.json
-├── tsconfig.json                # TypeScript config (IDE support)
-├── LICENSE                      # MIT license
-├── CLAUDE.md                    # AI assistant context
-└── README.md                    # This file
+├── .env                           # Your config (gitignored)
+├── .env.example                   # Config template
+├── package.json                   # Dependencies (@clack/prompts, ignore)
+├── CLAUDE.md                      # AI assistant context
+└── README.md                      # This file
 ```
 
-## Integrating Into an Existing Project
+## Manual Installation
 
-### Option A: Git submodule (recommended)
+If you prefer not to use a submodule, you can copy the files directly into your project:
 
-Add expo-builder as a submodule — no file duplication, updates via `git pull`:
-
-```bash
-cd your-project
-git submodule add https://github.com/defy-works/expo-builder.git eas-builder
-```
-
-Add to your `package.json`:
-```json
-{
-  "scripts": {
-    "eas": "bun run eas-builder/scripts/eas.ts"
-  }
-}
-```
-
-Create `eas-builder/.env` (all config lives in the submodule directory):
-```env
-PROJECT_NAME=my-app
-PROJECT_ROOT=..              # points to the parent project
-PROJECT_MOBILE_DIR=mobile    # relative to PROJECT_ROOT
-REMOTE_BUILDER_USER=...
-REMOTE_BUILDER_HOST=...
-REMOTE_BUILDER_PATH=~/eas/my-app
-EXPO_TOKEN=...
-```
-
-The script reads `.env`, `.ssh-key/`, and `plugins/` from its own directory (TOOL_ROOT). Source files, logs, and `.gitignore` come from PROJECT_ROOT (the parent project).
-
-### Option B: Copy files
-
-Copy the scripts into your project directly:
-
-1. Copy `scripts/eas.ts`, `scripts/setup-tart.ts`, `plugins/withBuildOptimizations.js`
+1. Copy `scripts/eas.ts`, `scripts/setup-tart.ts`
 2. Copy `.ssh-key/README.md` and create `.ssh-key/` directory
 3. Add to your `package.json`:
    ```json
@@ -326,7 +295,7 @@ Copy the scripts into your project directly:
    logs/
    ```
 5. Add the env vars from `.env.example` to your `.env`
-6. Set `PROJECT_MOBILE_DIR` to match your project structure
+6. Set `PROJECT_ROOT=.` and `PROJECT_MOBILE_DIR` to match your project structure
 
 ## Troubleshooting
 
@@ -334,18 +303,18 @@ Copy the scripts into your project directly:
 Install rsync: `choco install rsync`. The script needs cwRsync's cygwin SSH (Win32-OpenSSH is incompatible with rsync's binary protocol).
 
 ### "SSH key not found at .ssh-key/id"
-Copy your private key: `cp ~/.ssh/id_ed25519 .ssh-key/id` and set permissions:
-- **Windows**: `icacls .ssh-key\id /inheritance:r /grant:r "%USERNAME%:R"`
-- **macOS / Linux**: `chmod 600 .ssh-key/id`
+Copy your private key: `cp ~/.ssh/id_ed25519 eas-builder/.ssh-key/id` and set permissions:
+- **Windows**: `icacls eas-builder\.ssh-key\id /inheritance:r /grant:r "%USERNAME%:R"`
+- **macOS / Linux**: `chmod 600 eas-builder/.ssh-key/id`
 
 ### "Permission denied (publickey)" on rsync (macOS/Linux)
-Check that `.ssh-key/id` has `600` permissions: `ls -la .ssh-key/id` should show `-rw-------`. Fix with `chmod 600 .ssh-key/id`.
+Check that `.ssh-key/id` has `600` permissions: `ls -la eas-builder/.ssh-key/id` should show `-rw-------`. Fix with `chmod 600 eas-builder/.ssh-key/id`.
 
 ### "VM failed to boot within 90 seconds"
 The Mac may not have enough resources. Check that no other VMs are running: `ssh user@mac "tart list"`.
 
 ### "Tart VM not set up"
-Run `bun run setup` first. This creates the `eas-builder` base image on the Mac.
+Run `bun run eas-builder/scripts/setup-tart.ts` first. This creates the `eas-builder` base image on the Mac.
 
 ### Gradle OOM during Android build
 This is why optimizations are on by default. If you're still hitting OOM, your Mac may not have enough RAM. The script allocates `(total RAM - 4GB)` to the VM. 8GB minimum recommended, 16GB+ preferred.
@@ -354,7 +323,7 @@ This is why optimizations are on by default. If you're still hitting OOM, your M
 Check `logs/` for the full output. Common causes:
 - Missing environment variables — make sure `eas env:pull` has the right secrets
 - Different Xcode version — set `TART_XCODE_VERSION` in `.env` to match your EAS cloud image
-- Missing native dependencies — rebuild the VM image with `bun run setup`
+- Missing native dependencies — rebuild the VM image with `bun run eas-builder/scripts/setup-tart.ts`
 
 ## License
 
