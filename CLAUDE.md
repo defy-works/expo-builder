@@ -146,7 +146,7 @@ The shell scripts emit structured markers (`::phase::`, `::boot-wait::`, `::vm-i
 ### Version Management
 - `appVersionSource` should be `"remote"` in `eas.json` — EAS manages build numbers server-side
 - For `--remote` builds: version is fetched via `eas build:version:get`, incremented, and set via `eas build:version:set` after a successful build
-- `eas build:version:set` only accepts piped input: `echo "$NEXT" | eas build:version:set`
+- `eas build:version:set` has no `--version` flag — it's interactive-only. EAS CLI v18+ uses `@clack/prompts` which requires a TTY, so piped input doesn't work. The script uses `expect` (ships with macOS) to automate the interactive prompt.
 
 ### VM Resource Allocation
 The Mac host script dynamically allocates CPU and memory to the VM:

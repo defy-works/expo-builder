@@ -479,7 +479,17 @@ function buildVmScript(
     `CUR=$(echo "$VERSION_JSON" | bun -e "const d=JSON.parse(await Bun.stdin.text()); process.stdout.write(String(d.${versionField}??0))")`,
     "NEXT=$((CUR + 1))",
     'echo "::version::$CUR → $NEXT"',
-    `echo "$NEXT" | eas build:version:set -p ${plat} --profile ${profile} || echo "::error::Version increment failed"`,
+    // EAS CLI v18+ uses @clack/prompts which checks stdin.isTTY — piped input
+    // no longer works. Use expect (ships with macOS) to automate the prompt.
+    // Unquoted heredoc so bash expands $NEXT; Tcl variables are escaped.
+    'expect << VEOF || echo "::error::Version increment failed"',
+    `spawn eas build:version:set -p ${plat} --profile ${profile}`,
+    'expect "*version*"',
+    'send "$NEXT\\r"',
+    "expect eof",
+    "lassign [wait] pid spawnid os_error value",
+    "exit \\$value",
+    "VEOF",
   ];
 
   if (submit) {
