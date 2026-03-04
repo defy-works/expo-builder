@@ -91,7 +91,7 @@ Copy `.env.example` to `.env` and fill in. Key fields:
 
 ### 2. SSH Key
 
-Place your SSH private key at `.ssh-key/id` and set permissions (`chmod 600` on macOS/Linux, `icacls` on Windows). See `.ssh-key/README.md`.
+Place your SSH private key at `.ssh-key/id`. Permissions are set automatically before each build.
 
 ### 3. Install Dependencies
 

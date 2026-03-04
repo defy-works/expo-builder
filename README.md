@@ -109,20 +109,10 @@ EXPO_TOKEN=expo_xxxxxxxxxxxxx
 
 ### 3. SSH key
 
-rsync needs a key file (it can't use the SSH agent on all platforms).
+rsync needs a key file (it can't use the SSH agent on all platforms). Copy your private key — permissions are set automatically before each build.
 
 ```bash
 cp ~/.ssh/id_ed25519 eas-builder/.ssh-key/id
-```
-
-Lock down permissions:
-
-```bash
-# Windows (cwRsync rejects keys that are too open)
-icacls eas-builder\.ssh-key\id /inheritance:r /grant:r "%USERNAME%:R"
-
-# macOS / Linux
-chmod 600 eas-builder/.ssh-key/id
 ```
 
 The key must match an entry in `~/.ssh/authorized_keys` on the Mac.
@@ -282,12 +272,10 @@ If you prefer not to use a submodule, you can copy the files directly into your 
 Install rsync: `choco install rsync`. The script needs cwRsync's cygwin SSH (Win32-OpenSSH is incompatible with rsync's binary protocol).
 
 ### "SSH key not found at .ssh-key/id"
-Copy your private key: `cp ~/.ssh/id_ed25519 eas-builder/.ssh-key/id` and set permissions:
-- **Windows**: `icacls eas-builder\.ssh-key\id /inheritance:r /grant:r "%USERNAME%:R"`
-- **macOS / Linux**: `chmod 600 eas-builder/.ssh-key/id`
+Copy your private key: `cp ~/.ssh/id_ed25519 eas-builder/.ssh-key/id`. Permissions are set automatically.
 
-### "Permission denied (publickey)" on rsync (macOS/Linux)
-Check that `.ssh-key/id` has `600` permissions: `ls -la eas-builder/.ssh-key/id` should show `-rw-------`. Fix with `chmod 600 eas-builder/.ssh-key/id`.
+### "Permission denied (publickey)" on rsync
+The key at `eas-builder/.ssh-key/id` must match an entry in `~/.ssh/authorized_keys` on the Mac. Verify with `ssh -i eas-builder/.ssh-key/id user@mac echo ok`.
 
 ### "VM failed to boot within 90 seconds"
 The Mac may not have enough resources. Check that no other VMs are running: `ssh user@mac "tart list"`.
