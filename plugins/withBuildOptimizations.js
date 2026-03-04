@@ -1,14 +1,12 @@
 /**
  * Expo config plugin for CI/VM build optimizations (iOS only).
  *
- * Activated by setting OPTIMIZE_BUILD=1 env var — not always registered.
- * See app.config.ts for the conditional inclusion.
+ * Auto-injected by expo-builder during remote builds (via app.config wrapper).
+ * The project's app.config.ts does NOT need to reference this file — it's
+ * copied to plugins/ and added to the plugins array automatically.
  *
  * Android optimizations are handled entirely in the build script (scripts/eas.ts)
  * via ~/.gradle/ config files, since they don't require modifying the Xcode project.
- *
- * iOS optimizations must go through the config plugin because eas build --local
- * runs xcodebuild internally with no way to pass extra build settings.
  *
  * What it does:
  *   1. Disable Xcode index store (IDE feature, not needed for CI)

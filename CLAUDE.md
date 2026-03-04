@@ -144,18 +144,13 @@ PROJECT_MOBILE_DIR=mobile
 
 ### iOS Build Optimizations Plugin
 
-The iOS config plugin (`plugins/withBuildOptimizations.js`) is automatically copied from expo-builder to the project's `plugins/` directory on the Mac during remote builds when optimizations are enabled. No manual copy needed.
+Fully automatic — no changes needed in the project's `app.config.ts`.
 
-Your `app.config.ts` must conditionally include it:
+When optimizations are enabled (the default, disable with `--no-optimize`):
+1. The plugin file (`plugins/withBuildOptimizations.js`) is copied to the project's `plugins/` dir on the Mac
+2. `app.config.ts` is wrapped with a thin module that imports the original config and appends the plugin
 
-```ts
-plugins: [
-  // ... your other plugins
-  ...(process.env.OPTIMIZE_BUILD ? ["./plugins/withBuildOptimizations"] : []),
-],
-```
-
-The plugin is activated automatically when `--no-optimize` is NOT passed. It:
+The plugin:
 - Disables Xcode index store (saves memory, IDE-only feature)
 - Skips dSYM generation for non-production builds
 

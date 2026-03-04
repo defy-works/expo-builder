@@ -210,14 +210,7 @@ Applied via an Expo config plugin (`plugins/withBuildOptimizations.js`):
 - **Index store disabled**: `COMPILER_INDEX_STORE_ENABLE=NO` (IDE-only feature)
 - **dSYM skipped**: `DEBUG_INFORMATION_FORMAT=dwarf` for non-production (faster, less memory)
 
-The plugin is **automatically copied** from expo-builder to the project's `plugins/` directory on the Mac during remote builds. You just need the conditional include in your `app.config.ts`:
-
-```ts
-plugins: [
-  // ... your other plugins
-  ...(process.env.OPTIMIZE_BUILD ? ["./plugins/withBuildOptimizations"] : []),
-],
-```
+Fully automatic — no changes needed in your `app.config.ts`. During remote builds, the plugin is copied to the project's `plugins/` directory and injected into the config via a build-time wrapper.
 
 ## Version Management
 
