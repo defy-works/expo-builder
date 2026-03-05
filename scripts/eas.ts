@@ -1257,7 +1257,18 @@ async function promptBuildFlow(): Promise<boolean> {
       initialValue: true,
     });
     if (p.isCancel(optimize)) return false;
-    await runRemoteBuild(profile, platform, true, false, optimize);
+
+    let noCache = false;
+    if (readCacheKey(profile)) {
+      const useCache = await p.confirm({
+        message: "Use persistent build cache? (bun, Gradle, CocoaPods, ccache)",
+        initialValue: true,
+      });
+      if (p.isCancel(useCache)) return false;
+      noCache = !useCache;
+    }
+
+    await runRemoteBuild(profile, platform, true, false, optimize, noCache);
   }
   return true;
 }
@@ -1331,7 +1342,18 @@ async function promptDeployFlow(): Promise<boolean> {
       initialValue: true,
     });
     if (p.isCancel(optimize)) return false;
-    await runRemoteDeploy(profile, platform, true, optimize);
+
+    let noCache = false;
+    if (readCacheKey(profile)) {
+      const useCache = await p.confirm({
+        message: "Use persistent build cache? (bun, Gradle, CocoaPods, ccache)",
+        initialValue: true,
+      });
+      if (p.isCancel(useCache)) return false;
+      noCache = !useCache;
+    }
+
+    await runRemoteDeploy(profile, platform, true, optimize, noCache);
   }
   return true;
 }
