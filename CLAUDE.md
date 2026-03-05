@@ -161,6 +161,12 @@ What's cached:
 - **Gradle** — `~/.gradle/caches` (downloaded deps, build cache) + `~/.gradle/wrapper` (Gradle distributions)
 - **CocoaPods** — `~/Library/Caches/CocoaPods`
 
+- **ccache** — `~/.ccache` (compiled C/C++/ObjC object files for iOS builds)
+
+All caches use symlinks to VirtioFS — zero setup time, writes persist immediately. Our `bun install` uses `--backend=copyfile` to bypass macOS `clonefile()` which fails across VirtioFS boundaries.
+
+DerivedData is NOT cached — EAS copies the project to a random temp dir each build, changing the DerivedData subdir hash. ccache is used instead: it caches compiled C/C++/ObjC objects by content hash (path-independent), so cache hits work across different temp dirs. Requires `brew install ccache` in the VM image (added to `setup-tart.ts`). The `withBuildOptimizations` plugin sets `CC`/`CXX` to ccache wrapper scripts on all Xcode targets (app + pods via Podfile post_install injection).
+
 Cache invalidation: bump `cache.key` in `eas.json` (e.g., `"v4"` → `"v5"`). Old keys are cleaned up automatically on the next build.
 
 Skip with `--no-cache` flag. If no `cache.key` exists in `eas.json`, builds run without caching (no change from previous behavior).

@@ -472,10 +472,10 @@ function buildVmScript(
     "[ -f _app.config.original.ts ] && mv _app.config.original.ts app.config.ts",
     ...(cacheKey ? [
       "",
-      "# Set up persistent build cache (symlinks to host-mounted dir)",
+      "# Set up persistent build cache (all symlinks to host-mounted VirtioFS)",
       'echo "::phase::cache-setup"',
       `CACHE_DIR="$HOME/project/.build-cache/${cacheKey}"`,
-      'mkdir -p "$CACHE_DIR/bun" "$CACHE_DIR/gradle-caches" "$CACHE_DIR/gradle-wrapper" "$CACHE_DIR/cocoapods"',
+      'mkdir -p "$CACHE_DIR/bun" "$CACHE_DIR/gradle-caches" "$CACHE_DIR/gradle-wrapper" "$CACHE_DIR/cocoapods" "$CACHE_DIR/ccache"',
       "",
       "# Bun cache",
       "mkdir -p ~/.bun/install",
@@ -493,7 +493,25 @@ function buildVmScript(
       'rm -rf ~/Library/Caches/CocoaPods 2>/dev/null || true',
       'ln -sfn "$CACHE_DIR/cocoapods" ~/Library/Caches/CocoaPods',
       "",
-      '[ "$(ls -A "$CACHE_DIR/bun" 2>/dev/null)" ] || [ "$(ls -A "$CACHE_DIR/gradle-caches" 2>/dev/null)" ] && echo "::cache::hit" || echo "::cache::miss"',
+      "# ccache — C/C++/ObjC compilation cache (path-independent, unlike DerivedData).",
+      "# Wrapper scripts embed the full Xcode clang path. The withBuildOptimizations",
+      "# plugin sets CC/CXX to these wrappers on all targets (app + pods).",
+      "if command -v ccache &>/dev/null; then",
+      '  rm -rf ~/.ccache 2>/dev/null || true',
+      '  ln -sfn "$CACHE_DIR/ccache" ~/.ccache',
+      "  cat > ~/.ccache/ccache.conf << 'CCEOF'",
+      "max_size = 2G",
+      "sloppiness = clang_index_store,file_stat_matches,include_file_ctime,include_file_mtime,modules,system_headers,time_macros",
+      "CCEOF",
+      '  XCODE_CLANG="$(xcrun -f clang)"',
+      '  XCODE_CLANGPP="$(xcrun -f clang++)"',
+      "  mkdir -p /tmp/ccache-bin",
+      `  printf '#!/bin/bash\\nexec /opt/homebrew/bin/ccache "%s" "$@"\\n' "$XCODE_CLANG" > /tmp/ccache-bin/clang`,
+      `  printf '#!/bin/bash\\nexec /opt/homebrew/bin/ccache "%s" "$@"\\n' "$XCODE_CLANGPP" > /tmp/ccache-bin/clang++`,
+      "  chmod +x /tmp/ccache-bin/clang /tmp/ccache-bin/clang++",
+      "fi",
+      "",
+      '[ "$(ls -A "$CACHE_DIR/bun" 2>/dev/null | head -1)" ] || [ "$(ls -A "$CACHE_DIR/gradle-caches" 2>/dev/null | head -1)" ] && echo "::cache::hit" || echo "::cache::miss"',
     ] : []),
     ...earlyOptimize,
     "",
@@ -501,7 +519,9 @@ function buildVmScript(
     `eas env:pull --environment ${profile} --non-interactive`,
     "",
     'echo "::phase::install"',
-    "bun install --frozen-lockfile",
+    // --backend=copyfile: bun defaults to clonefile on macOS which fails across
+    // VirtioFS boundaries. copyfile forces regular copies from the global cache.
+    `bun install --frozen-lockfile${cacheKey ? " --backend=copyfile" : ""}`,
     ...lateOptimize,
     "",
     'echo "::phase::build"',
@@ -524,7 +544,7 @@ function buildVmScript(
     "set timeout 30",
     `spawn eas build:version:set -p ${plat} --profile ${profile}`,
     "expect {",
-    '  "*would you like*" { send \\"$NEXT\\\\r\\" }',
+    '  "*would you like*" { send "$NEXT\\r" }',
     "  timeout { exit 1 }",
     "}",
     "expect {",
@@ -830,7 +850,8 @@ async function runRemoteBuild(profile: Profile, platform: Platform, interactive 
       const lastOutput: string[] = [];
 
       // Noise patterns to filter from display (still logged to file)
-      const noisePattern = /^(\s+at\s)|^npm (warn|notice)\b/;
+      // Filter stack traces, npm warnings, and base64 blobs (eas-cli-local-build-plugin dumps these)
+      const noisePattern = /^(\s+at\s)|^npm (warn|notice)\b|[A-Za-z0-9+/]{200,}={0,2}/;
 
       // Patterns worth showing to the user during each phase.
       const showPatterns: Record<string, RegExp> = {

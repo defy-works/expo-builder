@@ -346,6 +346,7 @@ async function main() {
       ].join(" && "), { show: /Installing|done|Warning/i }))
     },
     { label: "Installing CocoaPods + Fastlane", fn: () => vmRunAsync("brew install cocoapods fastlane", { show: /==>|Installing/ }) },
+    { label: "Installing ccache (C/C++/ObjC compilation cache)", fn: () => vmRunAsync("brew install ccache", { show: /==>|Installing/ }) },
     { label: "Installing eas-cli + dotenv-cli", fn: () => vmRunAsync("$HOME/.bun/bin/bun install -g eas-cli dotenv-cli") },
     { label: "Cleaning up Homebrew cache", fn: () => vmRunAsync("brew cleanup --prune=all") },
   ];
