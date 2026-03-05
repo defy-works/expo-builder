@@ -998,15 +998,19 @@ async function runRemoteBuild(profile: Profile, platform: Platform, interactive 
         }
       });
 
-      // Ctrl+C: clean up VM first, THEN kill SSH.
-      // We must finish cleanup before the process exits, so we block on the
-      // cleanup SSH and only kill the build SSH afterwards.
-      let interrupted = false;
-      const onSigInt = () => {
-        if (interrupted) return; // ignore repeated Ctrl+C
-        interrupted = true;
+      // Ctrl+C handling: kill SSH child (triggers Mac-side EXIT trap as backup),
+      // then run explicit cleanup via new SSH, then force-exit.
+      // On Windows, SSH may consume CTRL_C_EVENT, so we also handle cleanup in
+      // the child's "close" event when the child is killed by signal.
+      let cleaningUp = false;
+      const cleanupAndExit = () => {
+        if (cleaningUp) return; // ignore repeated Ctrl+C during cleanup
+        cleaningUp = true;
         stopSpinner(false);
         p.log.warn("Interrupted — cleaning up VM on Mac...");
+        // Kill SSH child first — triggers Mac-side bash EXIT trap as backup
+        child.kill("SIGTERM");
+        // Explicit cleanup via new SSH (belt and suspenders)
         try {
           execFileSync("ssh", ["-o", "ConnectTimeout=10", sshTarget, loginWrap(
             `VM=$(cat ${vmStateFile} 2>/dev/null); ` +
@@ -1014,16 +1018,28 @@ async function runRemoteBuild(profile: Profile, platform: Platform, interactive 
             `[ -n "$VM" ] && tart delete "$VM" 2>/dev/null; ` +
             `rm -f ${vmStateFile} ${scriptPath}`
           )], { stdio: "pipe", timeout: 30000 });
-          p.log.info("VM cleaned up");
+          p.log.info("VM cleaned up.");
         } catch {
           p.log.warn("Could not clean up VM — will be cleaned up on next build");
         }
-        child.kill("SIGTERM");
+        process.exit(130);
       };
-      process.on("SIGINT", onSigInt);
+      process.on("SIGINT", cleanupAndExit);
+      process.on("SIGBREAK", cleanupAndExit); // Windows Ctrl+Break
 
-      child.on("close", (code) => {
-        process.off("SIGINT", onSigInt);
+      child.on("close", (code, signal) => {
+        process.off("SIGINT", cleanupAndExit);
+        process.off("SIGBREAK", cleanupAndExit);
+
+        // If child was killed by signal and we didn't initiate cleanup,
+        // the user likely pressed Ctrl+C but SIGINT didn't reach us
+        // (common on Windows where SSH consumes CTRL_C_EVENT).
+        if ((signal || code === 130) && !cleaningUp) {
+          cleanupAndExit();
+          return;
+        }
+        if (cleaningUp) { done(130); return; }
+
         if (buildFailed) {
           // Error was already reported via ::error:: marker.
           // Cleanup phase ran successfully — stop its spinner as OK.
@@ -1050,7 +1066,8 @@ async function runRemoteBuild(profile: Profile, platform: Platform, interactive 
         done(code ?? 1);
       });
       child.on("error", (err) => {
-        process.off("SIGINT", onSigInt);
+        process.off("SIGINT", cleanupAndExit);
+        process.off("SIGBREAK", cleanupAndExit);
         fail(err);
       });
     });
