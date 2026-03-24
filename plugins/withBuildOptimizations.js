@@ -24,12 +24,18 @@ const CCACHE_CLANG = "/tmp/ccache-bin/clang";
 const CCACHE_CLANGPP = "/tmp/ccache-bin/clang++";
 
 function withBuildOptimizations(config) {
+  // Read granular optimization flags from env vars (set by expo-builder).
+  // Default to "true" when absent for backward compatibility.
+  const enableIndexStore = process.env.OPTIMIZE_INDEX_STORE !== "false";
+  const enableSkipDsym = process.env.OPTIMIZE_SKIP_DSYM !== "false";
+  const enableCcache = process.env.OPTIMIZE_CCACHE !== "false";
+
   // 1. Modify main Xcode project: index store, dSYM, ccache for app target
   config = withXcodeProject(config, (config) => {
     const project = config.modResults;
     const buildProfile = process.env.EAS_BUILD_PROFILE || "";
     const isProduction = buildProfile === "production";
-    const hasCcache = fs.existsSync(CCACHE_CLANG);
+    const hasCcache = enableCcache && fs.existsSync(CCACHE_CLANG);
 
     const configurations = project.pbxXCBuildConfigurationSection();
     for (const key in configurations) {
@@ -46,11 +52,13 @@ function withBuildOptimizations(config) {
       if (!buildSettings.INFOPLIST_FILE?.includes?.("app/")) continue;
 
       // Disable index store — saves memory and time (IDE-only feature)
-      buildSettings.COMPILER_INDEX_STORE_ENABLE = "NO";
+      if (enableIndexStore) {
+        buildSettings.COMPILER_INDEX_STORE_ENABLE = "NO";
+      }
 
       // Skip dSYM generation for non-production builds
       // (dSYMs are needed for crash symbolication in production)
-      if (!isProduction && buildSettings.name === "Release") {
+      if (enableSkipDsym && !isProduction && buildSettings.name === "Release") {
         buildSettings.DEBUG_INFORMATION_FORMAT = "dwarf";
       }
     }
@@ -62,7 +70,7 @@ function withBuildOptimizations(config) {
   config = withDangerousMod(config, [
     "ios",
     (config) => {
-      if (!fs.existsSync(CCACHE_CLANG)) return config;
+      if (!enableCcache || !fs.existsSync(CCACHE_CLANG)) return config;
 
       const podfile = path.join(config.modRequest.platformProjectRoot, "Podfile");
       if (!fs.existsSync(podfile)) return config;

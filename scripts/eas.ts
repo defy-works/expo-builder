@@ -74,6 +74,20 @@ type Profile = "development" | "preview" | "production";
 type Platform = "android" | "ios" | "all";
 type BuildLocation = "eas" | "remote";
 
+interface OptimizeFlags {
+  /** Android: JVM memory tuning, Gradle workers limit, arm64-only, disable lintVital */
+  android: boolean;
+  /** iOS: Disable Xcode index store (COMPILER_INDEX_STORE_ENABLE=NO) */
+  indexStore: boolean;
+  /** iOS: Skip dSYM generation for non-production builds */
+  skipDsym: boolean;
+  /** iOS: ccache for C/C++/ObjC compilation */
+  ccache: boolean;
+}
+
+const DEFAULT_OPTIMIZE: OptimizeFlags = { android: true, indexStore: true, skipDsym: true, ccache: true };
+const NO_OPTIMIZE: OptimizeFlags = { android: false, indexStore: false, skipDsym: false, ccache: false };
+
 const COMMANDS = ["build", "submit", "deploy", "update", "run"] as const;
 const PROFILES = ["development", "preview", "production"] as const;
 const PLATFORMS = ["android", "ios", "all"] as const;
@@ -393,7 +407,7 @@ function buildVmScript(
   profile: Profile,
   plat: "android" | "ios",
   submit: boolean,
-  optimize: boolean,
+  optimize: OptimizeFlags,
   cacheKey: string | null = null,
 ): string {
   const projectName = PROJECT.name;
@@ -414,33 +428,35 @@ function buildVmScript(
   // can't resolve .ts imports from wrapper modules.
   const earlyOptimize: string[] = [];
   const lateOptimize: string[] = [];
-  if (optimize) {
-    if (plat === "android") {
-      earlyOptimize.push(
-        "",
-        "# Gradle tuning — dynamic memory, disable lint, limit workers",
-        "mkdir -p ~/.gradle",
-        'TOTAL_MEM_GB=$(( $(sysctl -n hw.memsize) / 1024 / 1024 / 1024 ))',
-        'JVM_MAX_GB=$(( TOTAL_MEM_GB > 4 ? TOTAL_MEM_GB - 2 : 2 ))',
-        `cat > ~/.gradle/gradle.properties << GEOF`,
-        "org.gradle.caching=true",
-        "org.gradle.workers.max=2",
-        "reactNativeArchitectures=arm64-v8a",
-        'org.gradle.jvmargs=-Xmx${JVM_MAX_GB}g -XX:MaxMetaspaceSize=512m -XX:+HeapDumpOnOutOfMemoryError',
-        "GEOF",
-        // Disable lintVital tasks — they OOM analyzing every RN dependency
-        `cat > ~/.gradle/init.gradle << 'GEOF'`,
-        "allprojects {",
-        "    afterEvaluate {",
-        "        tasks.matching { it.name.contains('lintVital') }.configureEach {",
-        "            enabled = false",
-        "        }",
-        "    }",
-        "}",
-        "GEOF",
-      );
-    }
+  const anyIosOpt = optimize.indexStore || optimize.skipDsym || optimize.ccache;
 
+  if (optimize.android && plat === "android") {
+    earlyOptimize.push(
+      "",
+      "# Gradle tuning — dynamic memory, disable lint, limit workers",
+      "mkdir -p ~/.gradle",
+      'TOTAL_MEM_GB=$(( $(sysctl -n hw.memsize) / 1024 / 1024 / 1024 ))',
+      'JVM_MAX_GB=$(( TOTAL_MEM_GB > 4 ? TOTAL_MEM_GB - 2 : 2 ))',
+      `cat > ~/.gradle/gradle.properties << GEOF`,
+      "org.gradle.caching=true",
+      "org.gradle.workers.max=2",
+      "reactNativeArchitectures=arm64-v8a",
+      'org.gradle.jvmargs=-Xmx${JVM_MAX_GB}g -XX:MaxMetaspaceSize=512m -XX:+HeapDumpOnOutOfMemoryError',
+      "GEOF",
+      // Disable lintVital tasks — they OOM analyzing every RN dependency
+      `cat > ~/.gradle/init.gradle << 'GEOF'`,
+      "allprojects {",
+      "    afterEvaluate {",
+      "        tasks.matching { it.name.contains('lintVital') }.configureEach {",
+      "            enabled = false",
+      "        }",
+      "    }",
+      "}",
+      "GEOF",
+    );
+  }
+
+  if (anyIosOpt) {
     // Inject build optimization plugin into app.config.ts by inserting it into
     // the plugins array. Uses a temp script to avoid shell escaping issues.
     // Runs after bun install so the config is valid for env:pull.
@@ -468,6 +484,10 @@ function buildVmScript(
     `ln -sfn '/Volumes/My Shared Files/${projectName}' ~/project`,
     `cd ${cdPath}`,
     `export EXPO_TOKEN="${expoToken}"`,
+    // Optimization flags for the withBuildOptimizations plugin
+    `export OPTIMIZE_INDEX_STORE="${optimize.indexStore}"`,
+    `export OPTIMIZE_SKIP_DSYM="${optimize.skipDsym}"`,
+    `export OPTIMIZE_CCACHE="${optimize.ccache}"`,
     // Clean up leftover wrapper files from previous failed builds (pre-v1.1 approach)
     "[ -f _app.config.original.ts ] && mv _app.config.original.ts app.config.ts",
     ...(cacheKey ? [
@@ -515,13 +535,15 @@ function buildVmScript(
     ] : []),
     ...earlyOptimize,
     "",
-    'echo "::phase::env-pull"',
-    `eas env:pull --environment ${profile} --non-interactive`,
-    "",
     'echo "::phase::install"',
+    // Install before env:pull — eas env:pull evaluates app.config.ts which may
+    // reference plugins (e.g. @sentry/react-native/expo) that need node_modules.
     // --backend=copyfile: bun defaults to clonefile on macOS which fails across
     // VirtioFS boundaries. copyfile forces regular copies from the global cache.
     `bun install --frozen-lockfile${cacheKey ? " --backend=copyfile" : ""}`,
+    "",
+    'echo "::phase::env-pull"',
+    `eas env:pull --environment ${profile} --non-interactive`,
     ...lateOptimize,
     "",
     'echo "::phase::build"',
@@ -646,7 +668,7 @@ VMEOF
 // Remote build (Tart VM on Mac)
 // =============================================================================
 
-async function runRemoteBuild(profile: Profile, platform: Platform, interactive = false, submit = false, optimize = true, noCache = false) {
+async function runRemoteBuild(profile: Profile, platform: Platform, interactive = false, submit = false, optimize: OptimizeFlags = DEFAULT_OPTIMIZE, noCache = false) {
   const remote = loadRemoteConfig();
   const sshTarget = `${remote.user}@${remote.host}`;
   const cacheKey = noCache ? null : readCacheKey(profile);
@@ -763,8 +785,8 @@ async function runRemoteBuild(profile: Profile, platform: Platform, interactive 
     );
   }
 
-  // Copy build optimizations plugin from tool directory if optimize is enabled
-  if (optimize) {
+  // Copy build optimizations plugin from tool directory if any iOS optimization is enabled
+  if (optimize.indexStore || optimize.skipDsym || optimize.ccache) {
     const pluginSrc = resolve(TOOL_ROOT, "plugins", "withBuildOptimizations.js");
     if (existsSync(pluginSrc)) {
       const mobileRel = resolve(MOBILE_DIR).replace(resolve(PROJECT_ROOT), "").replace(/\\/g, "/").replace(/^\//, "");
@@ -1082,7 +1104,7 @@ async function runRemoteBuild(profile: Profile, platform: Platform, interactive 
   }
 }
 
-async function runRemoteDeploy(profile: Profile, platform: Platform, interactive = false, optimize = true, noCache = false) {
+async function runRemoteDeploy(profile: Profile, platform: Platform, interactive = false, optimize: OptimizeFlags = DEFAULT_OPTIMIZE, noCache = false) {
   if (profile === "development") {
     throw new CommandError(
       "Cannot deploy development builds — they use internal distribution (APK) which stores reject.\n" +
@@ -1218,6 +1240,43 @@ async function selectBuildLocation(): Promise<BuildLocation | null> {
   return location;
 }
 
+async function promptOptimizeFlags(platform: Platform): Promise<OptimizeFlags | null> {
+  const showAndroid = platform === "all" || platform === "android";
+  const showIos = platform === "all" || platform === "ios";
+
+  const options: Record<string, { value: string; label: string; hint?: string }[]> = {};
+  if (showAndroid) {
+    options["Android"] = [
+      { value: "android", label: "Gradle tuning", hint: "JVM memory, workers, arm64-only, skip lintVital" },
+    ];
+  }
+  if (showIos) {
+    options["iOS"] = [
+      { value: "indexStore", label: "Disable index store", hint: "IDE-only feature" },
+      { value: "skipDsym", label: "Skip dSYM generation", hint: "disable for Sentry symbolication" },
+      { value: "ccache", label: "ccache", hint: "cache C/C++/ObjC compilation" },
+    ];
+  }
+
+  const allValues = Object.values(options).flat().map((o) => o.value);
+
+  const selected = await p.groupMultiselect<string>({
+    message: "Build optimizations (deselect to disable):",
+    options,
+    initialValues: allValues,
+    required: false,
+  });
+  if (p.isCancel(selected)) return null;
+
+  const set = new Set(selected as string[]);
+  return {
+    android: set.has("android"),
+    indexStore: set.has("indexStore"),
+    skipDsym: set.has("skipDsym"),
+    ccache: set.has("ccache"),
+  };
+}
+
 async function promptBuildFlow(): Promise<boolean> {
   p.log.step("Build");
 
@@ -1252,11 +1311,8 @@ async function promptBuildFlow(): Promise<boolean> {
   if (location === "eas") {
     runBuild(profile, platform);
   } else {
-    const optimize = await p.confirm({
-      message: "Optimize build? (limits memory, disables lint, skips dSYM)",
-      initialValue: true,
-    });
-    if (p.isCancel(optimize)) return false;
+    const optimize = await promptOptimizeFlags(platform);
+    if (!optimize) return false;
 
     let noCache = false;
     if (readCacheKey(profile)) {
@@ -1337,11 +1393,8 @@ async function promptDeployFlow(): Promise<boolean> {
   if (location === "eas") {
     runDeploy(profile, platform);
   } else {
-    const optimize = await p.confirm({
-      message: "Optimize build? (limits memory, disables lint, skips dSYM)",
-      initialValue: true,
-    });
-    if (p.isCancel(optimize)) return false;
+    const optimize = await promptOptimizeFlags(platform);
+    if (!optimize) return false;
 
     let noCache = false;
     if (readCacheKey(profile)) {
@@ -1496,8 +1549,14 @@ async function mainInner() {
 
   const { command } = parsed;
   const remote = parsed.rest.includes("--remote");
-  const optimize = !parsed.rest.includes("--no-optimize");
   const noCache = parsed.rest.includes("--no-cache");
+  const noAll = parsed.rest.includes("--no-optimize");
+  const optimize: OptimizeFlags = {
+    android:    noAll ? false : !parsed.rest.includes("--no-android-opt"),
+    indexStore:  noAll ? false : !parsed.rest.includes("--no-index-store"),
+    skipDsym:   noAll ? false : !parsed.rest.includes("--no-skip-dsym"),
+    ccache:     noAll ? false : !parsed.rest.includes("--no-ccache"),
+  };
 
   if (command === "run") {
     const platform = parsed.platform as "android" | "ios" | undefined;
