@@ -482,6 +482,7 @@ function buildVmScript(
     `export JAVA_HOME="/opt/homebrew/opt/openjdk@${JAVA_VERSION}"`,
     'export ANDROID_HOME="$HOME/Library/Android/sdk"',
     `ln -sfn '/Volumes/My Shared Files/${projectName}' ~/project`,
+    ...(cacheKey ? [`ln -sfn '/Volumes/My Shared Files/build-cache' ~/build-cache`] : []),
     `cd ${cdPath}`,
     `export EXPO_TOKEN="${expoToken}"`,
     // Optimization flags for the withBuildOptimizations plugin
@@ -494,7 +495,7 @@ function buildVmScript(
       "",
       "# Set up persistent build cache (all symlinks to host-mounted VirtioFS)",
       'echo "::phase::cache-setup"',
-      `CACHE_DIR="$HOME/project/.build-cache/${cacheKey}"`,
+      `CACHE_DIR="$HOME/build-cache/${cacheKey}"`,
       'mkdir -p "$CACHE_DIR/bun" "$CACHE_DIR/gradle-caches" "$CACHE_DIR/gradle-wrapper" "$CACHE_DIR/cocoapods" "$CACHE_DIR/ccache"',
       "",
       "# Bun cache",
@@ -610,12 +611,19 @@ for STALE in $(tart list --quiet 2>/dev/null | grep '^build-'); do
   tart delete "$STALE" 2>/dev/null || true
 done
 
-${cacheKey ? `# Clean up orphaned build caches (old cache keys)
-if [ -d "${remotePath}/.build-cache" ]; then
-  for DIR in "${remotePath}/.build-cache"/*/; do
-    [ -d "$DIR" ] && [ "$(basename "$DIR")" != "${cacheKey}" ] && rm -rf "$DIR" && echo "::cache-cleanup::$(basename "$DIR")"
-  done
-fi
+${cacheKey ? `# Resolve cache path (unquoted assignment expands tilde)
+CACHE_HOST=${remotePath}-cache
+
+# Remove old cache location (was inside project dir, caused EAS git casing errors)
+rm -rf ${remotePath}/.build-cache 2>/dev/null || true
+
+# Clean up orphaned build caches (old cache keys)
+mkdir -p "$CACHE_HOST"
+for DIR in "$CACHE_HOST"/*/; do
+  if [ -d "$DIR" ] && [ "$(basename "$DIR")" != "${cacheKey}" ]; then
+    rm -rf "$DIR" && echo "::cache-cleanup::$(basename "$DIR")"
+  fi
+done
 ` : ""}echo "::phase::clone-vm"
 tart clone eas-builder $VM
 
@@ -628,7 +636,7 @@ tart set $VM --cpu $VM_CPU --memory $VM_MEM_MB
 echo "::vm-resources::$VM_CPU CPUs, $((VM_MEM_MB / 1024))GB RAM"
 
 echo "::phase::boot-vm"
-tart run --dir=${projectName}:${remotePath} --no-graphics $VM &
+tart run --dir=${projectName}:${remotePath}${cacheKey ? ` --dir=build-cache:${remotePath}-cache` : ""} --no-graphics $VM &
 VM_PID=$!
 
 VM_IP=""
@@ -802,7 +810,8 @@ async function runRemoteBuild(profile: Profile, platform: Platform, interactive 
   }
 
   // EAS requires a git repo — init one since .git was excluded from sync.
-  execFileSync("ssh", [sshTarget, `cd ${remote.path} && git init && echo '.build-cache/' >> .gitignore && git add -A && (git diff --cached --quiet || git commit -m "deploy" --no-gpg-sign)`], { stdio: "pipe" });
+  // rm -rf .git ensures a clean repo with no stale index entries from previous builds.
+  execFileSync("ssh", [sshTarget, `cd ${remote.path} && rm -rf .git && git init && git add -A && (git diff --cached --quiet || git commit -m "deploy" --no-gpg-sign)`], { stdio: "pipe" });
   s2b.stop("Project synced to Mac");
 
   // ── Step 3: Build in Tart VM ───────────────────────────────────────────

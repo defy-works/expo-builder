@@ -154,7 +154,7 @@ The Mac host script dynamically allocates CPU and memory to the VM:
 - Memory: total MB - 4096 (minimum: all memory if ≤ 8GB)
 
 ### Persistent Build Cache
-When the build profile in `eas.json` has a `cache.key` (e.g., `"v4"`), dependency caches persist across builds at `REMOTE_BUILDER_PATH/.build-cache/<key>/` on the Mac host. Inside the VM, standard cache directories are symlinked to this persistent storage via the existing VirtioFS mount.
+When the build profile in `eas.json` has a `cache.key` (e.g., `"v6"`), dependency caches persist across builds at `REMOTE_BUILDER_PATH-cache/<key>/` on the Mac host (a sibling directory to the project, e.g., `~/eas/buddy-cache/v6/`). The cache is mounted as a separate VirtioFS volume (`build-cache`) and symlinked to `~/build-cache` inside the VM. This keeps cache files outside the project's git working tree, avoiding EAS filename casing checks on macOS.
 
 What's cached:
 - **Bun** — `~/.bun/install/cache` (package downloads)
@@ -167,7 +167,7 @@ All caches use symlinks to VirtioFS — zero setup time, writes persist immediat
 
 DerivedData is NOT cached — EAS copies the project to a random temp dir each build, changing the DerivedData subdir hash. ccache is used instead: it caches compiled C/C++/ObjC objects by content hash (path-independent), so cache hits work across different temp dirs. Requires `brew install ccache` in the VM image (added to `setup-tart.ts`). The `withBuildOptimizations` plugin sets `CC`/`CXX` to ccache wrapper scripts on all Xcode targets (app + pods via Podfile post_install injection).
 
-Cache invalidation: bump `cache.key` in `eas.json` (e.g., `"v4"` → `"v5"`). Old keys are cleaned up automatically on the next build.
+Cache invalidation: bump `cache.key` in `eas.json` (e.g., `"v6"` → `"v7"`). Old keys are cleaned up automatically on the next build.
 
 Skip with `--no-cache` flag. If no `cache.key` exists in `eas.json`, builds run without caching (no change from previous behavior).
 
