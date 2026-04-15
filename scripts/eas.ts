@@ -20,10 +20,13 @@
  *   bun eas update                             # OTA update (interactive)
  *   bun eas update preview "fix something"     # OTA update to preview channel
  *   bun eas run android                        # local build + install on device (macOS/Linux only)
+ *   bun eas pull                                # pull latest build artifacts from remote Mac
+ *   bun eas pull ios                            # pull iOS artifact only
+ *   bun eas build preview ios --remote --pull   # build + pull artifact to local machine
  */
 
 import { execFileSync, spawnSync, spawn } from "child_process";
-import { readFileSync, existsSync, readdirSync, writeFileSync, mkdirSync, appendFileSync } from "fs";
+import { readFileSync, existsSync, readdirSync, writeFileSync, mkdirSync, appendFileSync, renameSync } from "fs";
 import * as p from "@clack/prompts";
 import { resolve } from "path";
 import ignore from "ignore";
@@ -69,7 +72,7 @@ function readCacheKey(profile: Profile): string | null {
   } catch { return null; }
 }
 
-type Command = "build" | "submit" | "deploy" | "update" | "run" | "back";
+type Command = "build" | "submit" | "deploy" | "update" | "run" | "pull" | "back";
 type Profile = "development" | "preview" | "production";
 type Platform = "android" | "ios" | "all";
 type BuildLocation = "eas" | "remote";
@@ -88,7 +91,7 @@ interface OptimizeFlags {
 const DEFAULT_OPTIMIZE: OptimizeFlags = { android: true, indexStore: true, skipDsym: true, ccache: true };
 const NO_OPTIMIZE: OptimizeFlags = { android: false, indexStore: false, skipDsym: false, ccache: false };
 
-const COMMANDS = ["build", "submit", "deploy", "update", "run"] as const;
+const COMMANDS = ["build", "submit", "deploy", "update", "run", "pull"] as const;
 const PROFILES = ["development", "preview", "production"] as const;
 const PLATFORMS = ["android", "ios", "all"] as const;
 
@@ -557,26 +560,9 @@ function buildVmScript(
     `CUR=$(echo "$VERSION_JSON" | bun -e "const d=JSON.parse(await Bun.stdin.text()); process.stdout.write(String(d.${versionField}??0))")`,
     "NEXT=$((CUR + 1))",
     'echo "::version::$CUR → $NEXT"',
-    // EAS CLI v18+ wraps the `prompts` npm library which checks stdin.isTTY —
-    // piped input no longer works. Use expect (ships with macOS) to automate
-    // the interactive prompt. The prompt text is "What version would you like
-    // to set?" — we match "*would you like*" to avoid premature match on the
-    // "Proceeding with outdated version." update notice. `prompts` uses raw
-    // mode, so Enter = \r. Unquoted heredoc: bash expands $NEXT, Tcl vars escaped.
-    'expect << VEOF || echo "::error::Version increment failed"',
-    "set timeout 30",
-    `spawn eas build:version:set -p ${plat} --profile ${profile}`,
-    "expect {",
-    '  "*would you like*" { send "$NEXT\\r" }',
-    "  timeout { exit 1 }",
-    "}",
-    "expect {",
-    "  eof {}",
-    "  timeout { exit 1 }",
-    "}",
-    "lassign [wait] pid spawnid os_error value",
-    "exit \\$value",
-    "VEOF",
+    // set-version.ts calls the Expo GraphQL API directly to set the remote build version.
+    // Copied to the Mac host's remote path before the VM starts (accessible via VirtioFS mount).
+    `bun ~/project/set-version.ts ${plat} $NEXT || echo "::error::Version increment failed"`,
   ];
 
   if (submit) {
@@ -676,7 +662,7 @@ VMEOF
 // Remote build (Tart VM on Mac)
 // =============================================================================
 
-async function runRemoteBuild(profile: Profile, platform: Platform, interactive = false, submit = false, optimize: OptimizeFlags = DEFAULT_OPTIMIZE, noCache = false) {
+async function runRemoteBuild(profile: Profile, platform: Platform, interactive = false, submit = false, optimize: OptimizeFlags = DEFAULT_OPTIMIZE, noCache = false, pull = false) {
   const remote = loadRemoteConfig();
   const sshTarget = `${remote.user}@${remote.host}`;
   const cacheKey = noCache ? null : readCacheKey(profile);
@@ -808,6 +794,13 @@ async function runRemoteBuild(profile: Profile, platform: Platform, interactive 
       });
     }
   }
+
+  // Copy set-version.ts to Mac host (used by VM to increment remote build version via Expo API)
+  const setVersionSrc = resolve(TOOL_ROOT, "scripts", "set-version.ts");
+  spawnSync("ssh", [sshTarget, `cat > ${remote.path}/set-version.ts`], {
+    stdio: ["pipe", "pipe", "pipe"],
+    input: readFileSync(setVersionSrc, "utf-8"),
+  });
 
   // EAS requires a git repo — init one since .git was excluded from sync.
   // rm -rf .git ensures a clean repo with no stale index entries from previous builds.
@@ -1111,9 +1104,91 @@ async function runRemoteBuild(profile: Profile, platform: Platform, interactive 
     }
     p.log.success(`${plat} ${action.toLowerCase()} complete`);
   }
+
+  // Pull artifacts from remote Mac to local machine
+  if (pull) {
+    pullArtifacts(platforms, profile, remote);
+  } else if (interactive && !submit) {
+    const doPull = await p.confirm({
+      message: "Pull build artifacts to local machine?",
+      initialValue: false,
+    });
+    if (!p.isCancel(doPull) && doPull) {
+      pullArtifacts(platforms, profile, remote);
+    }
+  }
 }
 
-async function runRemoteDeploy(profile: Profile, platform: Platform, interactive = false, optimize: OptimizeFlags = DEFAULT_OPTIMIZE, noCache = false) {
+// =============================================================================
+// Pull artifacts from remote Mac
+// =============================================================================
+
+function pullArtifacts(platforms: ("android" | "ios")[], profile?: Profile, remote?: RemoteConfig) {
+  remote ??= loadRemoteConfig();
+  ensureSshKeyPermissions();
+  const sshTarget = `${remote.user}@${remote.host}`;
+  const mobileRel = resolve(MOBILE_DIR).replace(resolve(PROJECT_ROOT), "").replace(/\\/g, "/").replace(/^\//, "");
+  const remoteBuildDir = mobileRel ? `${remote.path}/${mobileRel}/build` : `${remote.path}/build`;
+
+  const localDir = resolve(PROJECT_ROOT, ENV("PULL_OUTPUT_DIR") || "builds");
+  const gitignorePath = resolve(localDir, ".gitignore");
+  if (!existsSync(localDir)) {
+    mkdirSync(localDir, { recursive: true });
+    writeFileSync(gitignorePath, "*\n!.gitignore\n");
+  }
+
+  const sshCmd = buildRsyncSshCmd();
+  const ts = new Date().toISOString().replace(/[:.]/g, "-").replace("T", "-").replace(/Z$/, "");
+  let pulled = 0;
+
+  // List files in the remote build directory once
+  const lsResult = spawnSync("rsync", [
+    "--list-only",
+    "-e", sshCmd,
+    `${sshTarget}:${remoteBuildDir}/output.*`,
+  ], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] });
+  const remoteFiles = new Set(
+    (lsResult.stdout ?? "").split("\n")
+      .map(l => l.trim().split(/\s+/).pop() ?? "")
+      .filter(f => f.startsWith("output."))
+  );
+
+  const extsByPlatform: Record<string, string[]> = {
+    ios: ["ipa"],
+    android: ["aab", "apk"],
+  };
+
+  for (const plat of platforms) {
+    const ext = extsByPlatform[plat]?.find(e => remoteFiles.has(`output.${e}`));
+    if (!ext) {
+      p.log.warn(`No ${plat} artifact found on remote`);
+      continue;
+    }
+
+    const filename = `${PROJECT.name}-${profile ?? "build"}-${ts}.${ext}`;
+    const localPath = resolve(localDir, filename);
+
+    const s = p.spinner();
+    s.start(`Pulling ${filename}...`);
+    const result = spawnSync("rsync", [
+      "-z",
+      "-e", sshCmd,
+      `${sshTarget}:${remoteBuildDir}/output.${ext}`,
+      IS_WINDOWS ? toRsyncPath(localPath) : localPath,
+    ], { stdio: ["pipe", "pipe", "pipe"] });
+
+    if (result.status !== 0) {
+      s.stop(`Failed to pull ${filename}`);
+    } else {
+      s.stop(`${filename} → ${localDir}`);
+      pulled++;
+    }
+  }
+
+  return pulled;
+}
+
+async function runRemoteDeploy(profile: Profile, platform: Platform, interactive = false, optimize: OptimizeFlags = DEFAULT_OPTIMIZE, noCache = false, pull = false) {
   if (profile === "development") {
     throw new CommandError(
       "Cannot deploy development builds — they use internal distribution (APK) which stores reject.\n" +
@@ -1122,7 +1197,7 @@ async function runRemoteDeploy(profile: Profile, platform: Platform, interactive
   }
 
   // Build + submit inside the Tart VM (submit=true)
-  await runRemoteBuild(profile, platform, interactive, /* submit */ true, optimize, noCache);
+  await runRemoteBuild(profile, platform, interactive, /* submit */ true, optimize, noCache, pull);
 }
 
 // =============================================================================
@@ -1468,6 +1543,35 @@ async function promptRunFlow(): Promise<boolean> {
   return true;
 }
 
+async function promptPullFlow(): Promise<boolean> {
+  p.log.step("Pull");
+
+  const profile = await p.select<Profile>({
+    message: "Which build profile?",
+    options: [
+      { value: "development", label: "Development" },
+      { value: "preview", label: "Preview" },
+      { value: "production", label: "Production" },
+    ],
+  });
+  if (p.isCancel(profile)) return false;
+
+  const platform = await p.select<Platform>({
+    message: "Which platform artifacts do you want to pull?",
+    options: [
+      { value: "all", label: "Both", hint: "IPA + AAB" },
+      { value: "ios", label: "iOS", hint: "IPA" },
+      { value: "android", label: "Android", hint: "AAB" },
+    ],
+  });
+  if (p.isCancel(platform)) return false;
+
+  const platforms: ("android" | "ios")[] =
+    platform === "all" ? ["ios", "android"] : [platform as "android" | "ios"];
+  pullArtifacts(platforms, profile);
+  return true;
+}
+
 async function interactive() {
   p.intro(`${PROJECT.name} EAS`);
 
@@ -1480,6 +1584,7 @@ async function interactive() {
         { value: "deploy", label: "Build + Submit", hint: "build then submit to stores" },
         { value: "update", label: "OTA Update", hint: "push JS bundle update (no native rebuild)" },
         { value: "run", label: "Run", hint: "local build + install on physical device (macOS/Linux)" },
+        { value: "pull", label: "Pull", hint: "download build artifacts from remote Mac" },
         { value: "back", label: "Back", hint: "exit" },
       ],
     });
@@ -1506,6 +1611,9 @@ async function interactive() {
         break;
       case "run":
         completed = await promptRunFlow();
+        break;
+      case "pull":
+        completed = await promptPullFlow();
         break;
     }
 
@@ -1558,6 +1666,7 @@ async function mainInner() {
 
   const { command } = parsed;
   const remote = parsed.rest.includes("--remote");
+  const pull = parsed.rest.includes("--pull");
   const noCache = parsed.rest.includes("--no-cache");
   const noAll = parsed.rest.includes("--no-optimize");
   const optimize: OptimizeFlags = {
@@ -1567,7 +1676,11 @@ async function mainInner() {
     ccache:     noAll ? false : !parsed.rest.includes("--no-ccache"),
   };
 
-  if (command === "run") {
+  if (command === "pull") {
+    const platforms: ("android" | "ios")[] =
+      !parsed.platform || parsed.platform === "all" ? ["ios", "android"] : [parsed.platform as "android" | "ios"];
+    pullArtifacts(platforms, parsed.profile);
+  } else if (command === "run") {
     const platform = parsed.platform as "android" | "ios" | undefined;
     if (!platform || platform === ("all" as any)) {
       throw new CommandError("Run requires a single platform: android or ios");
@@ -1575,7 +1688,7 @@ async function mainInner() {
     runLocal(platform);
   } else if (command === "build") {
     if (remote) {
-      await runRemoteBuild(parsed.profile ?? "development", parsed.platform ?? "all", false, false, optimize, noCache);
+      await runRemoteBuild(parsed.profile ?? "development", parsed.platform ?? "all", false, false, optimize, noCache, pull);
     } else {
       runBuild(parsed.profile ?? "development", parsed.platform ?? "all");
     }
@@ -1583,7 +1696,7 @@ async function mainInner() {
     runSubmit(parsed.profile ?? "preview", parsed.platform ?? "all");
   } else if (command === "deploy") {
     if (remote) {
-      await runRemoteDeploy(parsed.profile ?? "preview", parsed.platform ?? "all", false, optimize, noCache);
+      await runRemoteDeploy(parsed.profile ?? "preview", parsed.platform ?? "all", false, optimize, noCache, pull);
     } else {
       runDeploy(parsed.profile ?? "preview", parsed.platform ?? "all");
     }
