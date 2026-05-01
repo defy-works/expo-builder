@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+export {};
 /**
  * Set EAS remote build version via the Expo GraphQL API.
  *
