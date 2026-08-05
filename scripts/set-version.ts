@@ -1,11 +1,12 @@
 #!/usr/bin/env bun
 export {};
+import { existsSync, readFileSync } from "node:fs";
 /**
  * Set EAS remote build version via the Expo GraphQL API.
  *
  * Usage:  bun set-version.ts <ios|android> <buildVersion>
  *
- * Reads app.config.ts from cwd to extract projectId, bundleIdentifier/package,
+ * Reads the app config from cwd to extract projectId, bundleIdentifier/package,
  * and storeVersion. Requires EXPO_TOKEN in env.
  *
  * This replaces the fragile `expect`-based automation of `eas build:version:set`
@@ -27,11 +28,43 @@ if (!process.env.EXPO_TOKEN) {
   process.exit(1);
 }
 
-// Load app config — same way EAS CLI resolves it
-const configModule = require(`${process.cwd()}/app.config.ts`);
-const config = typeof configModule.default === "function"
-  ? configModule.default({ config: {} })
-  : configModule.default ?? configModule;
+/**
+ * Load the app config the way EAS CLI resolves it.
+ *
+ * A project may declare itself in any of these, and plenty use only app.json —
+ * assuming app.config.ts left those builds failing after a successful compile,
+ * with the version never set and the next build reusing the same number.
+ * Order matches Expo's own precedence: dynamic config wins over static.
+ */
+function loadAppConfig(): { config: any; source: string } {
+  const cwd = process.cwd();
+
+  for (const name of ["app.config.ts", "app.config.js"]) {
+    const path = `${cwd}/${name}`;
+    if (!existsSync(path)) continue;
+    const mod = require(path);
+    const resolved = typeof mod.default === "function"
+      ? mod.default({ config: {} })
+      : mod.default ?? mod;
+    return { config: resolved, source: name };
+  }
+
+  for (const name of ["app.config.json", "app.json"]) {
+    const path = `${cwd}/${name}`;
+    if (!existsSync(path)) continue;
+    // Static configs nest everything under `expo`.
+    const raw = JSON.parse(readFileSync(path, "utf-8"));
+    return { config: raw.expo ?? raw, source: name };
+  }
+
+  console.error(
+    "No app config found. Looked for app.config.ts, app.config.js, " +
+    `app.config.json and app.json in ${cwd}`,
+  );
+  process.exit(1);
+}
+
+const { config, source } = loadAppConfig();
 
 const appId = config.extra?.eas?.projectId;
 const storeVersion = config.version;
@@ -40,7 +73,7 @@ const applicationIdentifier = platform === "ios"
   : config.android?.package;
 
 if (!appId || !storeVersion || !applicationIdentifier) {
-  console.error("Could not extract projectId, version, or identifier from app.config.ts");
+  console.error(`Could not extract projectId, version, or identifier from ${source}`);
   process.exit(1);
 }
 
