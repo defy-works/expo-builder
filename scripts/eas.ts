@@ -487,10 +487,23 @@ function buildVmScript(
     `ln -sfn '/Volumes/My Shared Files/${projectName}' ~/project`,
     ...(cacheKey ? [`ln -sfn '/Volumes/My Shared Files/build-cache' ~/build-cache`] : []),
     `cd ${cdPath}`,
-    // The project is a VirtioFS mount owned by the host user, not by the VM's
-    // account, and git refuses a repo it does not own — `eas build --local`
-    // then dies on `git rev-parse --show-toplevel` with exit 128.
-    `git config --global --add safe.directory '*'`,
+    /*
+     * Take git out of the loop.
+     *
+     * The project is a VirtioFS mount owned by the host user, not the VM's
+     * account, so git refuses it as dubious and `eas build --local` dies on
+     * `git rev-parse --show-toplevel` with exit 128 and no explanation.
+     * Marking the mount safe fixes that when it holds, but it depends on the
+     * config landing for the right user in the right HOME, and it has failed
+     * to hold across image and mount changes.
+     *
+     * EAS_NO_VCS makes the CLI copy the directory rather than ask git about
+     * it, honouring .easignore and .gitignore as before. The class of failure
+     * disappears rather than being worked around, and the host no longer
+     * needs a throwaway repo to satisfy a query nobody makes.
+     */
+    `export EAS_NO_VCS=1`,
+    `git config --global --add safe.directory '*' 2>/dev/null || true`,
     `export EXPO_TOKEN="${expoToken}"`,
     // Optimization flags for the withBuildOptimizations plugin
     `export OPTIMIZE_INDEX_STORE="${optimize.indexStore}"`,
