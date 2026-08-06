@@ -60,7 +60,8 @@ These must be fixed even though they did not cause the observed disk usage.
 | Config | Auto-detection + `expo-builder.json`, secrets from env |
 | SSH key | Default to `~/.ssh`, overridable |
 | Storage | Scoped sync + `--delete`, bounded build cache, `clean`/`doctor` |
-| Images | One provisioned image, slimmed at provisioning time; OCI cache **retained**, not pruned |
+| Images | Slimmed at provisioning; retention derived from free space (1 by default today); OCI cache **retained**, not pruned |
+| External storage | `TART_HOME` relocatable to an external volume; APFS required as a hard check, SSD strongly recommended |
 | Low disk | Preflight check with automatic safe clean, refuse rather than fail mid-build |
 | Sequencing | One pass |
 
@@ -118,7 +119,12 @@ Full form:
 ```json
 {
   "$schema": "https://unpkg.com/expo-builder/schema.json",
-  "mac": { "host": "defymac", "user": "mingu", "sshKey": "~/.ssh/id_ed25519" },
+  "mac": {
+    "host": "defymac",
+    "user": "mingu",
+    "sshKey": "~/.ssh/id_ed25519",
+    "tartHome": "/Volumes/BuildSSD/.tart"
+  },
   "mobileDir": "mobile",
   "syncPaths": ["shared"],
   "vm": {
@@ -267,6 +273,25 @@ Because `GRADLE_USER_HOME` moves to the mounted cache, the Android optimization 
 
 A future step, if disk pressure persists, is EAS's actual approach: run a caching proxy on the Mac host (a local npm registry proxy, a Gradle read-only dependency cache) so the VM pulls over the network and nothing mutable is mounted at all. That is deferred — it is a larger build with its own operational surface, and shared content-addressed directories capture most of the benefit.
 
+#### External storage
+
+Tart's storage location is relocatable via `TART_HOME`, so `mac.tartHome` may point at an external volume. This moves essentially the entire expo-builder footprint off the internal disk and is the durable answer to disk pressure on a single Mac.
+
+Two hard requirements, both validated by `doctor` and by build preflight:
+
+**The volume must be APFS.** `clonefile(2)` is APFS-only. On exFAT or HFS+ it is unavailable, so copy-on-write silently degrades and every `tart clone` becomes a full byte-for-byte copy of the image — roughly 80 GB copied before each build starts, plus 80 GB of space per concurrent clone. The failure is silent and severe, so a non-APFS volume is a **hard error**, not a warning. Detected via `diskutil info -plist <volume>`.
+
+**Ownership must be enabled.** External volumes default to ignoring ownership, which is the most likely cause of the permission failures reported in [cirruslabs/tart#1112](https://github.com/cirruslabs/tart/issues/1112) when `TART_HOME` is relocated. `doctor` detects this and prints the fix: `sudo diskutil enableOwnership /Volumes/<name>`.
+
+Additionally warned, not blocked:
+
+- **Rotational media.** `diskutil info` reporting `Solid State: No` triggers a prominent warning. VM builds are random-I/O heavy, and a mechanical external drive will be far slower than internal NVMe. An external SSD over USB 3.2 Gen 2 or Thunderbolt is the supported configuration; a spinning HDD is permitted but discouraged.
+- **Network volumes** are rejected outright — SMB/NFS cannot back a VM disk reliably.
+
+Preflight verifies the volume is mounted before every remote build and fails fast with a clear message, rather than failing partway through when a path disappears. `expo-builder vm migrate --to <path>` relocates existing storage and updates config.
+
+When `tartHome` is on a volume with abundant free space, the constraints in §7 relax automatically — see `vm.keepImages` there.
+
 #### Target footprint
 
 | Item | Budget |
@@ -277,7 +302,9 @@ A future step, if disk pressure persists, is EAS's actual approach: run a cachin
 | Transient build clone + build writes | ≤ 25 GB, reclaimed on teardown |
 | **Peak** | **~100 GB** |
 
-This fits within the ~107 GB currently free, but only because of image slimming (§7). Without it the current 80 GB image pushes peak past the available space, which is why slimming is a requirement rather than an optimisation.
+This fits within the ~107 GB currently free on internal storage, but only because of image slimming (§7). Without it the current 80 GB image pushes peak past the available space, which is why slimming is a requirement rather than an optimisation **on the hardware as it stands**.
+
+Relocating `TART_HOME` to an external APFS SSD moves this entire table off the internal disk, at which point slimming becomes an optimisation again and `vm.keepImages` can exceed one. Slimming stays on by default regardless, since nothing in the build path uses what it removes.
 
 ### 7. SDK compatibility and image selection
 
@@ -323,7 +350,12 @@ Because the bundled table will go stale between releases, `doctor` treats a fetc
 
 #### Image strategy: one image, slimmed
 
-Exactly **one provisioned image** exists at a time, named `expo-builder`. `vm rebuild` replaces it in place; images are never accumulated per SDK. At 80 GB each on a 460 GB disk, a second image is not affordable.
+`vm.keepImages` defaults to `"auto"` and is derived from free space on the volume backing `TART_HOME`, rather than being a fixed policy:
+
+- Under 150 GB free: **one** provisioned image, named `expo-builder`, replaced in place by `vm rebuild`. At 80 GB each on the current 460 GB internal disk, a second image is not affordable.
+- Above 150 GB free: retain up to `keepImages` images (cap 3), named `expo-builder-xcode-<version>`, with LRU eviction. This makes switching between SDKs instant instead of a re-provision, and is the main practical reward for adding an external SSD (§6).
+
+An explicit integer overrides the derivation. The single-image case is the default assumption throughout this document because it matches the hardware as it stands today.
 
 Because the pristine pulled image is retained (§6), rebuilding is a `clonefile` re-clone plus provisioning, with **no re-download**, so replacing the image is cheap in bytes even though it costs provisioning time.
 
@@ -364,6 +396,7 @@ The project currently has no tests. Add, using `bun test`:
 
 - **Unit** — argument parsing (including unknown-flag rejection and positional compatibility), config discovery and precedence, sync-set computation (workspace resolution, `.gitignore`/`.easignore` application), `::phase::` marker parsing.
 - **Image resolution** — the §7 algorithm against a fixed fixture of ghcr tags, covering: exact known-good match (SDK 57 → 26.6), floor-only SDKs (SDK 54 must resolve to 26.0, **not** the newest tag), pre-release tags excluded, cross-repo selection when only one repo carries the needed Xcode, the no-tag-in-range warning path, and the unknown-SDK fallback. Network access is mocked; these must never hit ghcr in tests.
+- **Storage validation** — against `diskutil` output fixtures: non-APFS volumes rejected as a hard error, ownership-disabled volumes reported with the `enableOwnership` remedy, rotational media warned but permitted, network volumes rejected, and `vm.keepImages: "auto"` deriving 1 below the 150 GB threshold and more above it.
 - **Golden-file** — snapshots of the bash emitted by `host-script.ts` and `vm-script.ts` across the matrix of platform × profile × optimize × cache × submit. These scripts are the riskiest code and are pure string generation, so snapshots catch lifecycle regressions cheaply. Trap registration order and `HUP` presence get explicit assertions rather than relying on snapshot review.
 
 No integration test runs against a real Mac in CI. `build --remote --dry-run` prints the scripts that would be executed, which serves both manual verification and debugging.
