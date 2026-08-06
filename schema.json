@@ -1,0 +1,51 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "expo-builder configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "mac": {
+      "description": "The build Mac. Either \"user@host\" or an object.",
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["host"],
+          "properties": {
+            "host": { "type": "string" },
+            "user": { "type": "string" },
+            "sshKey": { "type": "string" },
+            "tartHome": {
+              "type": "string",
+              "description": "Relocate Tart storage. Must be an APFS volume with ownership enabled."
+            }
+          }
+        }
+      ]
+    },
+    "mobileDir": { "type": "string" },
+    "syncPaths": { "type": "array", "items": { "type": "string" } },
+    "vm": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "xcode": {
+          "type": "string",
+          "description": "\"auto\" (default), \"latest\", or an exact version such as \"26.6\"."
+        },
+        "name": { "type": "string" },
+        "keepImages": { "oneOf": [{ "type": "number" }, { "const": "auto" }] }
+      }
+    },
+    "cache": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "budgetGB": { "type": "number" }
+      }
+    }
+  }
+}

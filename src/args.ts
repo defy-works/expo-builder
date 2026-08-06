@@ -151,12 +151,12 @@ export function parseArgs(argv: string[]): ParsedArgs {
     }
 
     if (arg in BOOLEAN_FLAGS) {
-      (flags as Record<string, unknown>)[BOOLEAN_FLAGS[arg]!] = true;
+      (flags as unknown as Record<string, unknown>)[BOOLEAN_FLAGS[arg]!] = true;
       continue;
     }
 
     if (arg in NEGATED_FLAGS) {
-      (flags as Record<string, unknown>)[NEGATED_FLAGS[arg]!] = false;
+      (flags as unknown as Record<string, unknown>)[NEGATED_FLAGS[arg]!] = false;
       continue;
     }
 
@@ -187,7 +187,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
         }
         platform = value as Platform;
       } else {
-        (flags as Record<string, unknown>)[VALUE_FLAGS[arg]!] = value;
+        (flags as unknown as Record<string, unknown>)[VALUE_FLAGS[arg]!] = value;
       }
       continue;
     }
