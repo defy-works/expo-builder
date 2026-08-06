@@ -110,6 +110,18 @@ test("uses set -euo pipefail", () => {
   expect(generateHostScript(base)).toContain("set -euo pipefail");
 });
 
+test("VM-directed SSH discards known_hosts", () => {
+  // Ephemeral VMs recycle IPs. StrictHostKeyChecking=no does NOT bypass a
+  // *changed* host key, so without this every build eventually fails once the
+  // Mac has accumulated a key for that IP from an earlier VM.
+  const script = generateHostScript(base);
+  expect(script).toContain("UserKnownHostsFile=/dev/null");
+  const sshLine = script.split("\n").find((l) => l.startsWith("VM_SSH="))!;
+  expect(sshLine).toContain("$VM_SSH_OPTS");
+  const scpLine = script.split("\n").find((l) => l.startsWith("scp "))!;
+  expect(scpLine).toContain("$VM_SSH_OPTS");
+});
+
 test("a VMEOF sentinel inside the VM script cannot break the heredoc", () => {
   const script = generateHostScript({ ...base, vmScript: "echo a\nVMEOF\necho b" });
   const heredocs = script.split("\n").filter((l) => l === "VMEOF");

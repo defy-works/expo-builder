@@ -20,6 +20,15 @@ export interface ToolVersions {
 }
 
 /**
+ * Ephemeral VMs recycle IPs on the same subnet, so the Mac accumulates a host
+ * key per VM and eventually hits a collision. StrictHostKeyChecking=no does
+ * NOT bypass a *changed* key — only an unknown one — so known_hosts must be
+ * discarded entirely for VM-directed SSH.
+ */
+export const VM_SSH_OPTS =
+  "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR";
+
+/**
  * expo-builder only ever produces device and store archives, never runs a
  * simulator, so simulator runtimes and non-iOS platforms are dead weight.
  * iPhoneOS.platform is required for device builds and is never touched.
@@ -191,10 +200,10 @@ export async function provisionImage(opts: ProvisionOptions): Promise<number> {
   if (!ssh(target, "command -v sshpass", { allowFailure: true })) {
     await sshStream(target, "brew install hudochenkov/sshpass/sshpass");
   }
-  ssh(target, `sshpass -p admin ssh-copy-id -o StrictHostKeyChecking=no admin@${vmIp}`, { allowFailure: true });
+  ssh(target, `sshpass -p admin ssh-copy-id ${VM_SSH_OPTS} admin@${vmIp}`, { allowFailure: true });
   const verified = ssh(
     target,
-    `ssh -o BatchMode=yes -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no -o ConnectTimeout=10 admin@${vmIp} echo ok`,
+    `ssh -o BatchMode=yes -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519 ${VM_SSH_OPTS} -o ConnectTimeout=10 admin@${vmIp} echo ok`,
     { allowFailure: true },
   );
   if (verified !== "ok") {
@@ -206,7 +215,7 @@ export async function provisionImage(opts: ProvisionOptions): Promise<number> {
   }
   key.stop("SSH key auth configured");
 
-  const vmSsh = `ssh -o StrictHostKeyChecking=no -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519 admin@${vmIp}`;
+  const vmSsh = `ssh ${VM_SSH_OPTS} -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519 admin@${vmIp}`;
   const vmPath = 'export PATH="$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"';
   const inVm = (cmd: string, sudo = false) => {
     const body = sudo ? `echo admin | sudo -S ${cmd}` : cmd;

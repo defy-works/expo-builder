@@ -127,14 +127,17 @@ if [ -z "$VM_IP" ]; then
 fi
 echo "::vm-ip::$VM_IP"
 
-VM_SSH="ssh -o StrictHostKeyChecking=no -o IdentitiesOnly=yes -i $HOME/.ssh/id_ed25519 -o ConnectTimeout=30 admin@$VM_IP"
+# UserKnownHostsFile=/dev/null is required, not cosmetic: ephemeral VMs recycle
+# IPs, and StrictHostKeyChecking=no does not bypass a *changed* host key.
+VM_SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+VM_SSH="ssh $VM_SSH_OPTS -o IdentitiesOnly=yes -i $HOME/.ssh/id_ed25519 -o ConnectTimeout=30 admin@$VM_IP"
 
 $VM_SSH bash -s <<'VMEOF'
 ${safeVmScript}
 VMEOF
 
 echo "::phase::artifact"
-scp -o StrictHostKeyChecking=no -o IdentitiesOnly=yes -i "$HOME/.ssh/id_ed25519" \\
+scp $VM_SSH_OPTS -o IdentitiesOnly=yes -i "$HOME/.ssh/id_ed25519" \\
   "admin@$VM_IP:out/app.${artifactExt}" "${artifactDir}/app.${artifactExt}"
 
 trap - EXIT
