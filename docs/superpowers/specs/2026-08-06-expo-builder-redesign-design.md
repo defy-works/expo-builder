@@ -30,13 +30,15 @@ There were **no leaked build VMs** and **no orphan `tart` processes**. The VM te
 
 | What | `du` size | Cause |
 |---|---|---|
-| `~/.tart/cache/OCIs` | 80 GB | `setup-tart.ts:256` pulls the OCI image, `:267` clones it, cache never pruned |
+| `~/.tart/cache/OCIs` | 80 GB *nominal* | Pulled OCI image. **Mostly illusory** — see below; only ~5 GB was real |
 | `~/eas/buddy-cache/v5` | 28 GB | Orphaned build cache (cocoapods 15G, gradle 11G, bun 2.3G) from a removed feature |
 | `~/eas/buddy/admin/runpod` | 20 GB | `collectSyncFiles` walks the entire monorepo; rsync has no `--delete` |
 | `~/eas/buddy/{node_modules,mobile/build}` | 2.2 GB | `bun install` and `--output` write into the **mounted** dir |
 | `~/eas/buddy/.git` | 526 MB | Per-build `git init && git add -A && commit` (`eas.ts:695`), never gc'd (5708 loose objects, `size-pack: 0`) |
 
-**Remediated on 2026-08-06** ahead of implementation: `tart prune --entries caches --space-budget 0` and `rm -rf ~/eas`, after moving `output.aab` and `output.ipa` to `~/.expo-builder/artifacts/legacy/`. Reclaimed **57 GiB** (89% → 76%, 107 GiB free). The gap between 57 GiB and the ~132 GB `du` total is APFS block sharing: `tart clone` uses copy-on-write, so `du` counts blocks shared between the OCI cache and the local VM image twice.
+**Remediated on 2026-08-06** ahead of implementation: `tart prune --entries caches --space-budget 0` and `rm -rf ~/eas`, after moving `output.aab` and `output.ipa` to `~/.expo-builder/artifacts/legacy/`. Reclaimed **57 GiB** (89% → 76%, 107 GiB free).
+
+The gap between 57 GiB freed and the ~132 GB `du` total is APFS block sharing. `tart clone` uses `clonefile(2)`, which shares disk extents rather than copying bytes, so `du` counts blocks shared between the OCI cache and the local VM image against both. Since `~/eas` alone was ~52 GB of genuinely unique files, pruning the OCI cache recovered only about **5 GB**. This is why §6 retains the cache rather than pruning it: the entry above overstates its cost by more than an order of magnitude.
 
 ### Latent VM-lifecycle bugs (real, but not the cause of the disk issue)
 
@@ -57,7 +59,9 @@ These must be fixed even though they did not cause the observed disk usage.
 | Runtime | Bun **and** Node, via `bun build --target=node` |
 | Config | Auto-detection + `expo-builder.json`, secrets from env |
 | SSH key | Default to `~/.ssh`, overridable |
-| Storage | All four: scoped sync + `--delete`, OCI auto-prune, bounded build cache, `clean`/`doctor` |
+| Storage | Scoped sync + `--delete`, bounded build cache, `clean`/`doctor` |
+| Images | One provisioned image, slimmed at provisioning time; OCI cache **retained**, not pruned |
+| Low disk | Preflight check with automatic safe clean, refuse rather than fail mid-build |
 | Sequencing | One pass |
 
 ## Design
@@ -121,7 +125,7 @@ Full form:
     "xcode": "auto",
     "name": "expo-builder"
   },
-  "cache": { "enabled": true, "budgetGB": 30 }
+  "cache": { "enabled": true, "budgetGB": 15 }
 }
 ```
 
@@ -225,19 +229,49 @@ Legacy `build-*` VMs from the old naming are still swept, for migration.
 
 ### 6. Storage
 
+The build Mac is disk-constrained: 460 GB total with ~107 GB free after the 2026-08-06 cleanup, of which one provisioned image already claims 80 GB. Storage design is therefore a first-class constraint, not an afterthought.
+
+#### The OCI cache is retained, not pruned
+
+**This reverses an earlier decision in this document's first revision.** `tart clone` uses macOS `clonefile(2)`, so a cloned VM shares disk extents with its source and no bytes are copied up front; the two diverge lazily under copy-on-write. The pulled OCI image and the local VM built from it therefore share nearly all their blocks, and `du` counts those shared blocks against both.
+
+The 2026-08-06 cleanup measured this: 57 GiB was freed in total, but `~/eas` alone accounted for ~52 GB of genuinely unique files. Pruning the nominally "80 GB" OCI cache recovered only **roughly 5 GB**.
+
+So the pristine pulled image is retained. It costs ~5 GB and it makes re-provisioning free — a re-clone rather than a 61.9 GB re-download. Tart additionally auto-prunes its own cache under space pressure (up to 100 GB, tunable via `--prune-limit`), so the cache self-manages in an emergency.
+
+`clean --deep` still offers explicit OCI cache pruning for when space is genuinely needed, but `clean` no longer does it by default and `vm rebuild` no longer triggers it.
+
+#### clean
+
 `expo-builder clean` reports what it would remove, then confirms (`--yes` skips, `--dry-run` reports only):
 
-- `tart prune --entries caches --space-budget 0` — the OCI cache
 - Stale `expo-builder-build-*` and legacy `build-*` VMs
 - Legacy `~/eas/*` sync directories
-- Artifacts beyond the 5 most recent per project
+- Artifacts beyond the 3 most recent per project
 - Cache directories over budget
+- With `--deep` only: the OCI cache, accompanied by a warning that the next `vm rebuild` will re-download ~62 GB
 
-It runs automatically after `vm rebuild`. `doctor` reports Mac free space and warns below 40 GB, which is roughly the headroom one image rebuild needs.
+#### Preflight
 
-The bounded build cache is restored: `~/.expo-builder/cache/<slug>/{bun,cocoapods,gradle}` is mounted into the VM as a second `--dir`, with `BUN_INSTALL_CACHE_DIR`, `CP_HOME_DIR`, and `GRADLE_USER_HOME` pointed at it. After each build, an LRU sweep enforces `cache.budgetGB` (default 30). `--no-cache` and `cache.enabled: false` disable it.
+Before each remote build, `expo-builder` projects the space the build needs (transient CoW clone plus build writes, budgeted at 25 GB) against actual free space. If short, it runs the safe subset of `clean` automatically — stale VMs, over-budget cache, old artifacts — and only then proceeds. If still short, it refuses with a breakdown of what is consuming space rather than dying mid-build on a full disk. `doctor` reports the same breakdown on demand and warns below 40 GB free.
+
+#### Build cache
+
+`~/.expo-builder/cache/<slug>/{bun,cocoapods,gradle}` is mounted into the VM as a second `--dir`, with `BUN_INSTALL_CACHE_DIR`, `CP_HOME_DIR`, and `GRADLE_USER_HOME` pointed at it. After each build an LRU sweep enforces `cache.budgetGB`, **default 15** rather than the 30 in the first revision, given the disk constraint. Preflight trims the cache first when space is short. `--no-cache` and `cache.enabled: false` disable it.
 
 Because `GRADLE_USER_HOME` moves to the mounted cache, the Android optimization files (`gradle.properties`, `init.gradle`) are written into that gradle home rather than `~/.gradle`.
+
+#### Target footprint
+
+| Item | Budget |
+|---|---|
+| Pristine OCI image + provisioned image (extent-shared) | ~55–60 GB after slimming |
+| Build cache | ≤ 15 GB |
+| Artifacts (3 per project) | < 1 GB |
+| Transient build clone + build writes | ≤ 25 GB, reclaimed on teardown |
+| **Peak** | **~100 GB** |
+
+This fits within the ~107 GB currently free, but only because of image slimming (§7). Without it the current 80 GB image pushes peak past the available space, which is why slimming is a requirement rather than an optimisation.
 
 ### 7. SDK compatibility and image selection
 
@@ -280,6 +314,29 @@ The SDK table ships bundled so the tool works offline, and is refreshable rather
 - `build --remote` performs the same check against the cache (never blocking on the network) and warns when a better-matching image is available or when the project's SDK has changed since provisioning. It does not rebuild the image implicitly — that is a ~25 GB download and stays an explicit `vm rebuild`.
 
 Because the bundled table will go stale between releases, `doctor` treats a fetched table as authoritative over the bundled one, and reports when it is falling back to bundled data.
+
+#### Image strategy: one image, slimmed
+
+Exactly **one provisioned image** exists at a time, named `expo-builder`. `vm rebuild` replaces it in place; images are never accumulated per SDK. At 80 GB each on a 460 GB disk, a second image is not affordable.
+
+Because the pristine pulled image is retained (§6), rebuilding is a `clonefile` re-clone plus provisioning, with **no re-download**, so replacing the image is cheap in bytes even though it costs provisioning time.
+
+Provisioning **slims the image before freezing it**. This tool only ever produces device and store archives — it never runs a simulator — so the iOS/tvOS/watchOS simulator runtimes shipped in the cirruslabs image are dead weight, as is non-iOS platform support. Provisioning removes them and records the measured before/after size in `~/.expo-builder/image.json`.
+
+The expected saving is 20–35 GB, but that figure is **unverified** — it must be measured on the first provisioning run and this document updated with the real number. The §6 footprint table assumes slimming lands the image near 50 GB; if measurement shows otherwise, the cache budget and retention counts need revisiting.
+
+#### Rejected: base image plus self-installed Xcode
+
+Pulling `macos-sequoia-base` (23.7 GB) and installing Xcode with the `xcodes` CLI instead of pulling `macos-sequoia-xcode` (61.9 GB) was considered, on the theory that switching Xcode versions would then cost a ~14 GB Xcode download rather than a full image pull.
+
+Rejected because:
+
+- Apple gates Xcode downloads behind developer-portal authentication, so this makes an **Apple ID and 2FA mandatory** for image provisioning, plus a keychain session that expires. That is a direct regression against this project's primary goal of being easy to run.
+- The steady-state saving is only ~5 GB, since the retained OCI image and the provisioned clone share extents anyway.
+- The benefit is concentrated entirely in *switching* Xcode versions, which the one-image-at-a-time policy makes rare.
+- It adds failure modes outside our control: Apple download flakiness, session expiry, rate limiting, and a 20–30 minute unxip.
+
+Worth revisiting only if the single-image policy proves too restrictive in practice.
 
 #### Provisioning
 
