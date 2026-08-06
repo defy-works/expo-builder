@@ -1,6 +1,6 @@
 {
   "name": "@defy-works/expo-builder",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Build Expo/React Native apps in ephemeral Tart VMs on a remote Mac — from any OS",
   "license": "MIT",
   "type": "module",
