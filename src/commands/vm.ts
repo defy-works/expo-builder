@@ -6,7 +6,9 @@ import { ssh, type SshTarget } from "../remote/ssh";
 import { parseSdkMajor, resolveImage } from "../compat";
 import { loadCompatTags } from "../compat-cache";
 import { provisionImage } from "../setup/tart";
-import { parseDiskutilInfo, validateVolume, deriveKeepImages, GB } from "../remote/storage";
+import {
+  parseDiskutilInfo, validateVolume, deriveKeepImages, diskutilCommandFor, GB,
+} from "../remote/storage";
 
 const SUBCOMMANDS = ["list", "rebuild", "delete", "migrate"] as const;
 export type VmSubcommand = (typeof SUBCOMMANDS)[number];
@@ -63,7 +65,7 @@ export async function runVm(args: ParsedArgs): Promise<number> {
           "Example: expo-builder vm migrate --to /Volumes/BuildSSD/.tart",
         );
       }
-      const info = ssh(target, `diskutil info "${to}" 2>/dev/null || true`, { allowFailure: true });
+      const info = ssh(target, diskutilCommandFor(to), { allowFailure: true });
       if (!info) {
         throw new BuildError(`Could not inspect ${to} on the Mac. Is the volume mounted?`);
       }

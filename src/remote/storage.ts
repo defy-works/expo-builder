@@ -22,11 +22,22 @@ function field(text: string, label: string): string {
   return match?.[1]?.trim() ?? "";
 }
 
+/**
+ * Build the shell to inspect the volume backing an arbitrary path.
+ * `diskutil info` only accepts a device or mount point — passing a plain
+ * directory fails with "Could not find disk" — so resolve the mount point first.
+ */
+export function diskutilCommandFor(path: string): string {
+  return `diskutil info "$(df -P "${path}" | tail -1 | awk '{for(i=6;i<=NF;i++) printf "%s%s", $i, (i<NF?" ":"")}')" 2>/dev/null || true`;
+}
+
 export function parseDiskutilInfo(text: string): VolumeInfo {
   const personality = field(text, "File System Personality").toLowerCase();
   const bundle = field(text, "Type \\(Bundle\\)").toLowerCase();
   const protocol = field(text, "Protocol").toLowerCase();
-  const freeRaw = field(text, "Volume Free Space");
+  // APFS internal volumes report "Container Free Space"; others report
+  // "Volume Free Space". Accept either.
+  const freeRaw = field(text, "Volume Free Space") || field(text, "Container Free Space");
   const bytesMatch = freeRaw.match(/\((\d+)\s*Bytes\)/i);
 
   return {

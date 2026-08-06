@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
-  parseDiskutilInfo, validateVolume, deriveKeepImages, planImageEviction, GB,
+  parseDiskutilInfo, validateVolume, deriveKeepImages, planImageEviction,
+  diskutilCommandFor, GB,
 } from "../src/remote/storage";
 
 const apfsSsd = `
@@ -22,6 +23,30 @@ test("parses an APFS SSD volume", () => {
   expect(v.ownershipEnabled).toBe(true);
   expect(v.solidState).toBe(true);
   expect(v.freeBytes).toBe(900000000000);
+});
+
+test("parses the real APFS internal-volume layout, which uses Container Free Space", () => {
+  // Verbatim shape from `diskutil info /` on macOS 26.6.
+  const real = `
+   Volume Name:               Macintosh HD
+   File System Personality:   APFS
+   Owners:                    Enabled
+   Protocol:                  Apple Fabric
+   Container Free Space:      112.6 GB (112645550080 Bytes) (exactly 220010840 512-Byte-Units)
+   Solid State:               Yes
+`;
+  const v = parseDiskutilInfo(real);
+  expect(v.isAPFS).toBe(true);
+  expect(v.freeBytes).toBe(112645550080);
+  expect(v.solidState).toBe(true);
+  expect(validateVolume(v).errors).toEqual([]);
+});
+
+test("diskutil is pointed at the mount point, not the raw path", () => {
+  // `diskutil info /Users/mingu` fails with "Could not find disk".
+  const cmd = diskutilCommandFor("$HOME");
+  expect(cmd).toContain("df -P");
+  expect(cmd).toContain("diskutil info");
 });
 
 test("an APFS SSD with ownership enabled passes cleanly", () => {

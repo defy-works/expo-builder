@@ -3,7 +3,7 @@ import { compareVersions, requirementsFor, resolveImage, parseSdkMajor } from ".
 import { loadCompatTags } from "../compat-cache";
 import { loadConfig, readExpoSdkRange, remotePaths } from "../config";
 import { ssh, sshTargetString, type SshTarget } from "../remote/ssh";
-import { parseDiskutilInfo, validateVolume, GB } from "../remote/storage";
+import { parseDiskutilInfo, validateVolume, diskutilCommandFor, GB } from "../remote/storage";
 import type { ParsedArgs } from "../args";
 
 export interface ImageRecord {
@@ -115,7 +115,7 @@ export async function runDoctor(args: ParsedArgs): Promise<number> {
   try { imageRecord = recordJson ? (JSON.parse(recordJson) as ImageRecord) : undefined; } catch { /* absent */ }
 
   const volumeTarget = cfg.mac.tartHome ?? "$HOME";
-  const diskutil = ssh(target, `diskutil info "${volumeTarget}" 2>/dev/null || true`, { allowFailure: true });
+  const diskutil = ssh(target, diskutilCommandFor(volumeTarget), { allowFailure: true });
   const volume = diskutil ? parseDiskutilInfo(diskutil) : undefined;
   const validation = volume ? validateVolume(volume) : { errors: [], warnings: [] };
 
