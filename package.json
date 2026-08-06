@@ -1,5 +1,5 @@
 {
-  "name": "expo-builder",
+  "name": "@defy-works/expo-builder",
   "version": "0.2.0",
   "description": "Build Expo/React Native apps in ephemeral Tart VMs on a remote Mac — from any OS",
   "license": "MIT",
@@ -17,6 +17,13 @@
   ],
   "engines": {
     "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/defy-works/expo-builder.git"
   },
   "scripts": {
     "build": "bun build src/cli.ts --target=node --format=esm --outfile dist/cli.js --banner \"#!/usr/bin/env node\"",

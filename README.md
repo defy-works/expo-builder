@@ -23,10 +23,10 @@ cd /path/to/expo-builder && bun link
 cd /path/to/your-project  && bun link expo-builder
 ```
 
-**From npm** — once published:
+**From npm**:
 
 ```bash
-bun add -d expo-builder     # or: bun add -g expo-builder
+bun add -d @defy-works/expo-builder     # or: bun add -g @defy-works/expo-builder
 bunx expo-builder --help    # npx also works
 ```
 
@@ -56,7 +56,7 @@ Full form:
 
 ```json
 {
-  "$schema": "https://unpkg.com/expo-builder/schema.json",
+  "$schema": "https://unpkg.com/@defy-works/expo-builder/schema.json",
   "mac": {
     "host": "your-mac",
     "user": "you",

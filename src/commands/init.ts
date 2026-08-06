@@ -55,7 +55,7 @@ export async function runInit(args: ParsedArgs): Promise<number> {
   s.stop(`Connected to ${mac}`);
 
   const config: Record<string, unknown> = {
-    $schema: "https://unpkg.com/expo-builder/schema.json",
+    $schema: "https://unpkg.com/@defy-works/expo-builder/schema.json",
     mac,
   };
   if (mobileDir && mobileDir !== projectRoot) {
