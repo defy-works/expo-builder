@@ -257,9 +257,15 @@ Before each remote build, `expo-builder` projects the space the build needs (tra
 
 #### Build cache
 
-`~/.expo-builder/cache/<slug>/{bun,cocoapods,gradle}` is mounted into the VM as a second `--dir`, with `BUN_INSTALL_CACHE_DIR`, `CP_HOME_DIR`, and `GRADLE_USER_HOME` pointed at it. After each build an LRU sweep enforces `cache.budgetGB`, **default 15** rather than the 30 in the first revision, given the disk constraint. Preflight trims the cache first when space is short. `--no-cache` and `cache.enabled: false` disable it.
+The cache is **shared across all projects**, not per-project: `~/.expo-builder/cache/{bun,cocoapods,gradle}`, mounted into the VM as a second `--dir`, with `BUN_INSTALL_CACHE_DIR`, `CP_HOME_DIR`, and `GRADLE_USER_HOME` pointed at it.
+
+The first revision of this document used a per-project `cache/<slug>/` layout. That was wrong for a constrained disk: these caches are content-addressed, so two Expo projects sharing most of their dependency graph would store two nearly identical copies. Sharing deduplicates them and keeps the cache from scaling with project count. This follows EAS's own model, which serves all builds from shared npm/Maven/CocoaPods caches rather than per-project storage (§10).
+
+After each build an LRU sweep enforces `cache.budgetGB`, **default 15** rather than the 30 in the first revision, given the disk constraint. Preflight trims the cache first when space is short. `--no-cache` and `cache.enabled: false` disable it.
 
 Because `GRADLE_USER_HOME` moves to the mounted cache, the Android optimization files (`gradle.properties`, `init.gradle`) are written into that gradle home rather than `~/.gradle`.
+
+A future step, if disk pressure persists, is EAS's actual approach: run a caching proxy on the Mac host (a local npm registry proxy, a Gradle read-only dependency cache) so the VM pulls over the network and nothing mutable is mounted at all. That is deferred — it is a larger build with its own operational surface, and shared content-addressed directories capture most of the benefit.
 
 #### Target footprint
 
@@ -362,6 +368,22 @@ The project currently has no tests. Add, using `bun test`:
 
 No integration test runs against a real Mac in CI. `build --remote --dry-run` prints the scripts that would be executed, which serves both manual verification and debugging.
 
+## 10. Prior art: how EAS Build does it
+
+Checked deliberately, since EAS solves the same problem at scale and offers roughly fifteen Xcode images concurrently.
+
+**Images are monolithic, one per (OS, Xcode) pair.** EAS image names encode the whole environment — `macos-sonoma-14.6-xcode-16.1`, `ubuntu-24.04-jdk-17-ndk-r27b-sdk-55` — and each carries "one specific version of Node.js, Yarn, CocoaPods, Xcode, Ruby, Fastlane". There is no base image with Xcode swapped in afterwards. This is direct support for §7's rejection of the base-plus-`xcodes` approach.
+
+**Scale is handled by fleet, not by layering.** iOS builds run on Mac mini hosts in Expo's own macOS cloud, with every build getting a fresh VM. Carrying many images is affordable because a build is scheduled onto a host that has the right one — a lever unavailable with a single Mac. Hence §7's one-image-at-a-time policy: the constraint is real and structural, not a shortcoming of this design.
+
+**Ephemeral VM per build.** Matches what this tool already does.
+
+**Caching is served, not stored per project.** EAS runs an npm cache server, a Maven cache server, and serves most CocoaPods artifacts from a cache server. Build VMs pull through the network; nothing persistent accumulates per project on the builder. `ccache` is keyed on a hash of the lockfile.
+
+This last point changed the design: §6's cache moved from per-project to shared, and a host-side caching proxy is recorded as the eventual direction rather than mounted directories.
+
+**Not publicly documented,** and therefore not relied upon here: which hypervisor Expo uses, whether hosts hold all images or pull on demand, and their per-host eviction policy. Statements above are drawn from Expo's published documentation; the fleet-scheduling inference is ours.
+
 ## Out of scope
 
 - Concurrent builds of the same project against one Mac. The stale sweep is made concurrency-safe so parallel builds do not destroy each other, but parallel-build orchestration is not a feature.
@@ -377,4 +399,6 @@ Compatibility data in §7 was gathered on 2026-08-06 from:
 - [Expo SDK reference — support for Android and iOS versions](https://docs.expo.dev/versions/latest/) — per-SDK Xcode floors
 - [EAS Build infrastructure — iOS server images](https://docs.expo.dev/build-reference/infrastructure/) — default image per SDK
 - [Expo SDK 57 changelog](https://expo.dev/changelog/sdk-57) — React Native 0.86, Node 22.13 minimum
-- `ghcr.io/cirruslabs/macos-{tahoe,sequoia}-xcode` tag lists, queried anonymously
+- [EAS Build caching](https://docs.expo.dev/build-reference/caching/) — the cache-server model in §10
+- [Tart FAQ](https://tart.run/faq/) — `clonefile(2)` copy-on-write, automatic cache pruning
+- `ghcr.io/cirruslabs/macos-{tahoe,sequoia}-xcode` and `-base` tag lists and manifest sizes, queried anonymously
