@@ -22,7 +22,7 @@ All findings below were confirmed by read-only inspection of the build Mac (`min
 
 The Tart image is built from `ghcr.io/cirruslabs/macos-sequoia-xcode:26.2`, so the VM has **Xcode 26.2**. Expo SDK 56 already raised the iOS floor to **Xcode 26.4**, and SDK 57 (React Native 0.86, Node ≥ 22.13) keeps it there. iOS builds therefore fail at the Xcode/pod stage.
 
-Newest published tags: `macos-sequoia-xcode:26.6` and `macos-tahoe-xcode:26.5`. The host Mac runs Xcode 26.6, so `macos-sequoia-xcode:26.6` is both the newest available and host-matching.
+Newest published Tart tags: `macos-sequoia-xcode:26.6` and `macos-tahoe-xcode:26.5`. EAS Cloud builds SDK 57 with Xcode 26.6, so `macos-sequoia-xcode:26.6` is the correct target — see §7, which establishes that matching EAS's Xcode beats picking the newest.
 
 ### Disk (confirmed — and not what it appeared to be)
 
@@ -118,8 +118,7 @@ Full form:
   "mobileDir": "mobile",
   "syncPaths": ["shared"],
   "vm": {
-    "image": "ghcr.io/cirruslabs/macos-sequoia-xcode",
-    "xcode": "26.6",
+    "xcode": "auto",
     "name": "expo-builder"
   },
   "cache": { "enabled": true, "budgetGB": 30 }
@@ -240,15 +239,53 @@ The bounded build cache is restored: `~/.expo-builder/cache/<slug>/{bun,cocoapod
 
 Because `GRADLE_USER_HOME` moves to the mounted cache, the Android optimization files (`gradle.properties`, `init.gradle`) are written into that gradle home rather than `~/.gradle`.
 
-### 7. SDK compatibility
+### 7. SDK compatibility and image selection
 
-`compat.ts` holds a small data-driven table mapping Expo SDK major version to minimum Xcode, Node, and JDK. It is seeded only with entries verified against Expo's published requirements — at time of writing, SDK 57 (Xcode 26.4, Node 22.13, JDK 17) and SDK 56 (Xcode 26.4). Entries for older SDKs are added as they are verified rather than guessed. SDK versions absent from the table warn rather than block, so a new Expo release does not break the tool.
+**Newest is not safest.** Expo's own [`expo-sdk-xcode-compatibility`](https://github.com/expo/fyi/blob/main/expo-sdk-xcode-compatibility.md) states: "Expo SDKs support up to a specific Xcode version. If you use a newer, unsupported version, your build may fail." So the image must be chosen to match the project's SDK, not pinned to the latest release.
 
-Provisioning records the image tag and the actual installed Xcode/Node/JDK versions to `~/.expo-builder/image.json`. `doctor` reads the project's `expo` dependency version, diffs it against that record, and prints the exact remedy — for example `expo-builder vm rebuild --xcode 26.6`.
+Expo publishes a **floor** per SDK in its support matrix, and an effective **known-good** version as the default EAS Cloud image for that SDK. The second is the better target: it is Expo stating which Xcode it actually builds that SDK with, and matching it maximises fidelity between local VM builds and cloud builds, which is this tool's purpose.
 
-The default image becomes `ghcr.io/cirruslabs/macos-sequoia-xcode:26.6`.
+| SDK | Xcode floor | EAS Cloud default (known-good) |
+|---|---|---|
+| 57 | 26.4 | 26.6 (`macos-tahoe-26.5-xcode-26.6`) |
+| 56 | 26.4 | 26.4 (`macos-tahoe-26.4-xcode-26.4`) |
+| 55 | 26.2 | 26.2 (`macos-sequoia-15.6-xcode-26.2`) |
+| 54 | 16.1 | 26.0 (`macos-sequoia-15.6-xcode-26.0`) |
+| 53 | — | 16.4 (`macos-sequoia-15.5-xcode-16.4`) |
+| 49–51 | — | 15.4 (`macos-sonoma-14.5-xcode-15.4`) |
 
-`setup/tart.ts` currently warns and continues when a provisioning step fails (`setup-tart.ts:358-365`), which silently produces a broken image. Step failures become **fatal by default**, with `--continue-on-error` to opt out. Provisioning also asserts the installed Node version meets the floor before declaring success.
+Note that SDK 54's floor is 16.1 while EAS builds it on 26.0: a floor alone is not enough information to pick an image.
+
+#### Resolution algorithm
+
+`vm.xcode` defaults to `"auto"`. Resolution:
+
+1. Read the project's Expo SDK major version from `mobileDir/package.json`.
+2. Look up `{ floor, knownGood }` for that SDK.
+3. List available Tart image tags from **both** `ghcr.io/cirruslabs/macos-tahoe-xcode` and `macos-sequoia-xcode`. The ghcr tag list is readable anonymously (fetch a pull-scoped token, then `GET /v2/<repo>/tags/list`), so this needs no credentials. Discard `-beta`, `-rc`, and non-version tags including `latest`.
+4. Choose the newest tag satisfying `floor <= tag <= knownGood`. Tie-break toward the macOS base EAS uses for that SDK.
+5. If nothing satisfies the range, pick the newest `>= floor` and **warn** that it exceeds what EAS builds this SDK with.
+6. If the SDK is absent from the table, use the newest stable tag and warn that compatibility is unverified.
+
+Searching both repositories is required, not optional: SDK 57 targets Xcode 26.6, and on Tart that exists only as `macos-sequoia-xcode:26.6` — `macos-tahoe-xcode` currently stops at 26.5.
+
+`vm.xcode` also accepts an explicit version (pin exactly) or `"latest"` (newest stable tag, accompanied by a warning on every build, since Expo documents this as a failure mode).
+
+#### Staying current
+
+The SDK table ships bundled so the tool works offline, and is refreshable rather than static:
+
+- `expo-builder doctor` compares the provisioned image against the resolution above and prints the exact remedy, for example `expo-builder vm rebuild` when the image is Xcode 26.2 but the project is on SDK 57.
+- `doctor --refresh` re-fetches the SDK table and the ghcr tag lists, caching to `~/.expo-builder/compat.json` with a TTL.
+- `build --remote` performs the same check against the cache (never blocking on the network) and warns when a better-matching image is available or when the project's SDK has changed since provisioning. It does not rebuild the image implicitly — that is a ~25 GB download and stays an explicit `vm rebuild`.
+
+Because the bundled table will go stale between releases, `doctor` treats a fetched table as authoritative over the bundled one, and reports when it is falling back to bundled data.
+
+#### Provisioning
+
+Provisioning records the resolved image tag and the actual installed Xcode, Node, and JDK versions to `~/.expo-builder/image.json`, so `doctor` compares against reality rather than against the tag alone.
+
+`setup/tart.ts` currently warns and continues when a provisioning step fails (`setup-tart.ts:358-365`), which silently produces a broken image. Step failures become **fatal by default**, with `--continue-on-error` to opt out. Provisioning also asserts the installed Node version meets the SDK floor (22.13 for SDK 57) before declaring success.
 
 ### 8. Rename and migration
 
@@ -262,7 +299,8 @@ The submodule installation path is dropped from the docs in favour of the npm pa
 
 The project currently has no tests. Add, using `bun test`:
 
-- **Unit** — argument parsing (including unknown-flag rejection and positional compatibility), config discovery and precedence, sync-set computation (workspace resolution, `.gitignore`/`.easignore` application), `::phase::` marker parsing, `compat.ts` lookups including the unknown-SDK fallback.
+- **Unit** — argument parsing (including unknown-flag rejection and positional compatibility), config discovery and precedence, sync-set computation (workspace resolution, `.gitignore`/`.easignore` application), `::phase::` marker parsing.
+- **Image resolution** — the §7 algorithm against a fixed fixture of ghcr tags, covering: exact known-good match (SDK 57 → 26.6), floor-only SDKs (SDK 54 must resolve to 26.0, **not** the newest tag), pre-release tags excluded, cross-repo selection when only one repo carries the needed Xcode, the no-tag-in-range warning path, and the unknown-SDK fallback. Network access is mocked; these must never hit ghcr in tests.
 - **Golden-file** — snapshots of the bash emitted by `host-script.ts` and `vm-script.ts` across the matrix of platform × profile × optimize × cache × submit. These scripts are the riskiest code and are pure string generation, so snapshots catch lifecycle regressions cheaply. Trap registration order and `HUP` presence get explicit assertions rather than relying on snapshot review.
 
 No integration test runs against a real Mac in CI. `build --remote --dry-run` prints the scripts that would be executed, which serves both manual verification and debugging.
@@ -273,3 +311,13 @@ No integration test runs against a real Mac in CI. `build --remote --dry-run` pr
 - Non-macOS remote builders.
 - Replacing EAS CLI itself. `expo-builder` continues to wrap `eas`.
 - Windows or Linux as the remote builder host.
+
+## Sources
+
+Compatibility data in §7 was gathered on 2026-08-06 from:
+
+- [Expo SDK Xcode Compatibility](https://github.com/expo/fyi/blob/main/expo-sdk-xcode-compatibility.md) — the "support up to a specific Xcode version" upper-bound warning
+- [Expo SDK reference — support for Android and iOS versions](https://docs.expo.dev/versions/latest/) — per-SDK Xcode floors
+- [EAS Build infrastructure — iOS server images](https://docs.expo.dev/build-reference/infrastructure/) — default image per SDK
+- [Expo SDK 57 changelog](https://expo.dev/changelog/sdk-57) — React Native 0.86, Node 22.13 minimum
+- `ghcr.io/cirruslabs/macos-{tahoe,sequoia}-xcode` tag lists, queried anonymously
