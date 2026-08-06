@@ -304,9 +304,11 @@ The resulting trade, per Xcode version:
 
 | Configuration | Disk per version | Rebuild cost |
 |---|---|---|
-| Retain cache + slim | ~92 GB | Free — re-clone, no download |
-| Drop cache + slim | ~67 GB | ~62 GB re-download |
-| Retain cache, no slim | ~92 GB | Free |
+| Retain cache + slim | **87 GB (measured)** | Free — re-clone, no download |
+| Drop cache + slim | ~66 GB | ~62 GB re-download |
+| Retain cache, no slim | ~87 GB | Free |
+
+The 87 GB figure is measured, not estimated: provisioning `macos-sequoia-xcode:26.6` on 2026-08-06 took the Mac from 189 GB free to 102 GB. It is close to the 92 GB originally estimated.
 
 Default: **retain the cache and slim anyway.** Slimming costs nothing to perform, and it becomes the operative saving the moment `clean --deep` drops the cache or the cache is evicted under pressure. On internal-only storage where §6's footprint table is binding, `clean --deep` converts the retained configuration into the 67 GB one on demand.
 
@@ -316,26 +318,30 @@ Component budget per Xcode version: 80 GB image, ~12 GB provisioning tooling (An
 
 | Volume | Capacity | Assessment |
 |---|---|---|
-| 256 GB | 1 version, ~137 GB peak | Works, no headroom |
+| 256 GB | 1 version, ~128 GB peak | Works, no headroom |
 | 500 GB | 2–3 versions | Practical minimum |
 | 1 TB | 3 versions with wide headroom | **Recommended** |
 | 2 TB | — | Unnecessary at current scale |
 
+Sizing uses the measured 87 GB per version, not the original estimate.
+
 Recommended configuration: **1 TB NVMe SSD in a USB 3.2 Gen 2 or Thunderbolt enclosure**, formatted APFS with ownership enabled. This accommodates the `keepImages` cap of 3 with room to spare and makes switching Xcode versions instant.
 
-The 80 GB image figure is measured; the ~12 GB tooling and ~25 GB slimming figures are estimates to be replaced with measurements on the first provisioning run.
+All figures here are now measured rather than estimated, from provisioning `macos-sequoia-xcode:26.6` on 2026-08-06: 87 GB total per version, 20.0 GB reclaimed by slimming, 66 GB final image. Installed toolchain: Xcode 26.6, Node 26.7.0, JDK 17.0.20 — all above Expo SDK 57's floors of 26.4 / 22.13 / 17.
 
 #### Target footprint
 
 | Item | Budget |
 |---|---|
-| Pristine OCI image + provisioned image (extent-shared) | ~55–60 GB after slimming |
+| Pristine OCI image + provisioned image (extent-shared) | **87 GB measured** (was estimated 55–60) |
 | Build cache | ≤ 15 GB |
 | Artifacts (3 per project) | < 1 GB |
 | Transient build clone + build writes | ≤ 25 GB, reclaimed on teardown |
-| **Peak** | **~100 GB** |
+| **Peak total** | **~128 GB** |
 
-This fits within the ~107 GB currently free on internal storage, but only because of image slimming (§7). Without it the current 80 GB image pushes peak past the available space, which is why slimming is a requirement rather than an optimisation **on the hardware as it stands**.
+**Corrected against measurement.** The first revision estimated 55–60 GB for the image pair and a ~100 GB peak. The real figure is 87 GB and ~128 GB, because slimming delivered 20 GB rather than the 25–35 GB the lower estimate assumed.
+
+The practical position on the current hardware: 87 GB is already consumed and 102 GB remains free, so a build needs about 41 GB more at peak and fits comfortably. What no longer fits is a **second** provisioned image — hence `deriveKeepImages` correctly returning 1 at this free-space level. Slimming remains a requirement, not an optimisation, on internal storage.
 
 Relocating `TART_HOME` to an external APFS SSD moves this entire table off the internal disk, at which point slimming becomes an optimisation again and `vm.keepImages` can exceed one. Slimming stays on by default regardless, since nothing in the build path uses what it removes.
 
@@ -394,7 +400,9 @@ Because the pristine pulled image is retained (§6), rebuilding is a `clonefile`
 
 Provisioning **slims the image before freezing it**. This tool only ever produces device and store archives — it never runs a simulator — so the iOS/tvOS/watchOS simulator runtimes shipped in the cirruslabs image are dead weight, as is non-iOS platform support. Provisioning removes them and records the measured before/after size in `~/.expo-builder/image.json`.
 
-The expected saving is 20–35 GB, but that figure is **unverified** — it must be measured on the first provisioning run and this document updated with the real number. The §6 footprint table assumes slimming lands the image near 50 GB; if measurement shows otherwise, the cache budget and retention counts need revisiting.
+**Measured 2026-08-06 on the first real provisioning run: 20.0 GB reclaimed** — the low end of the original 20–35 GB estimate. The provisioned image settles at **66 GB** (Tart-reported; 62 GB by `du`), not the ~50 GB the first revision of this document assumed. The footprint table in §6 has been corrected accordingly.
+
+Recorded automatically to `~/.expo-builder/image.json` as `slimmedGb` on every provisioning run, so the figure stays current rather than drifting back into estimate.
 
 Note that slimming does not reduce total disk while the OCI cache is retained, since the removed blocks remain referenced by the cache. See "Slimming and cache retention interact" in §6 — the saving is realised when the cache is dropped, not when the files are deleted.
 
