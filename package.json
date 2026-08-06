@@ -21,7 +21,7 @@
     "build": "bun build src/cli.ts --target=node --format=esm --outfile dist/cli.js --banner \"#!/usr/bin/env node\"",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "bun run build"
+    "prepare": "bun run build"
   },
   "devDependencies": {
     "@clack/prompts": "^1.0.1",

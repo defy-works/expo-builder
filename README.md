@@ -8,18 +8,29 @@ Also supports EAS Cloud builds, store submission, OTA updates, and local device 
 
 ## Install
 
+**From git** (no npm publish required — recommended for private use):
+
 ```bash
-# Try it without installing
-bunx expo-builder --help
-
-# Or add to your project
-bun add -d expo-builder
-
-# Or install globally
-bun add -g expo-builder
+bun add -d github:defy-works/expo-builder
 ```
 
-`npx expo-builder` works too — the package is bundled for Node and has zero runtime dependencies.
+The `prepare` script builds `dist/` on install, so this needs Bun on the installing machine.
+
+**From a local checkout** (for developing expo-builder itself):
+
+```bash
+cd /path/to/expo-builder && bun link
+cd /path/to/your-project  && bun link expo-builder
+```
+
+**From npm** — once published:
+
+```bash
+bun add -d expo-builder     # or: bun add -g expo-builder
+bunx expo-builder --help    # npx also works
+```
+
+The published package is bundled for Node and has **zero runtime dependencies**, so `bunx`/`npx` starts without an install step.
 
 ## Quick start
 
