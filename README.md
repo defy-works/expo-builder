@@ -1,296 +1,174 @@
 # expo-builder
 
-Build Expo/React Native apps in ephemeral [Tart](https://tart.run/) VMs on a remote Mac — from any OS (Windows, macOS, or Linux), via SSH.
+Build Expo/React Native apps in ephemeral [Tart](https://tart.run/) VMs on a remote Mac — from any OS (Windows, macOS, or Linux), over SSH.
 
 Every build gets a **fresh macOS VM clone** with Xcode and all dependencies pre-installed. No dependency drift, no stale caches, no Homebrew conflicts. When the build finishes, the VM is deleted.
 
-Also supports EAS Cloud builds, store submission, OTA updates, and local device installs — all through one CLI.
+Also supports EAS Cloud builds, store submission, OTA updates, and local device installs — through one CLI.
 
-## Why?
-
-EAS Cloud builds cost credits and queue time. Running `eas build --local` on a bare-metal Mac works but accumulates state — Homebrew updates break Xcode's `exportArchive`, PATH conflicts between tools, and every dependency is a potential failure point.
-
-Tart VMs solve this: each build starts from a frozen image. The VM boots in ~20s, runs the build, and gets deleted. If something breaks, clone a new image and rebuild — no debugging stale state.
-
-## How It Works
-
-```
-Your machine                       Mac (Apple Silicon)
-────────────                       ──────────────────
-bun eas build --remote
-  │
-  ├─ rsync ──────────────────────► ~/eas/my-app/
-  │  (project files)
-  │
-  └─ ssh ────────────────────────► bash script on Mac host
-                                     │
-                                     ├─ Clean up stale VMs
-                                     ├─ tart clone eas-builder → build-<ts>
-                                     ├─ Allocate CPU/RAM to VM
-                                     ├─ tart run (boot VM, mount project)
-                                     │
-                                     └─ ssh admin@<vm-ip> ──► inside Tart VM
-                                          │
-                                          ├─ eas env:pull (credentials)
-                                          ├─ bun install
-                                          ├─ eas build --local
-                                          ├─ eas build:version:set (increment)
-                                          └─ eas submit (if deploying)
-                                     │
-                                     ├─ tart stop → tart delete
-                                     └─ (VM gone, no state left)
-```
-
-## Prerequisites
-
-### On Your Machine (Windows, macOS, or Linux)
-- [Bun](https://bun.sh/) — runtime
-- SSH client:
-  - **Windows**: ships with Windows 10+ (Settings → Apps → Optional Features → OpenSSH Client)
-  - **macOS / Linux**: pre-installed
-- rsync:
-  - **Windows**: `choco install rsync` (installs cwRsync)
-  - **macOS**: `brew install rsync` (or use the built-in rsync)
-  - **Linux**: `sudo apt install rsync` (or your distro's package manager)
-
-### On the Remote Mac
-- Apple Silicon (M1/M2/M3/M4) — required for Tart's Virtualization.framework
-- [Homebrew](https://brew.sh/) — the setup script installs everything else
-- SSH access — your machine must be able to `ssh user@mac`
-
-### Expo
-- An [Expo](https://expo.dev/) account
-- An access token — create at expo.dev → Account Settings → Access Tokens
-- Your project should use EAS Build (i.e., have an `eas.json`)
-
-## Setup
-
-### 1. Add to your project
+## Install
 
 ```bash
-git submodule add https://github.com/defy-works/expo-builder.git eas-builder
+# Try it without installing
+bunx expo-builder --help
+
+# Or add to your project
+bun add -d expo-builder
+
+# Or install globally
+bun add -g expo-builder
 ```
 
-Add a script to your `package.json`:
+`npx expo-builder` works too — the package is bundled for Node and has zero runtime dependencies.
+
+## Quick start
+
+```bash
+bunx expo-builder init      # writes expo-builder.json, verifies SSH to your Mac
+bunx expo-builder doctor    # checks the Mac, the VM image, and SDK compatibility
+bunx expo-builder vm rebuild # provisions the VM image (first run only)
+
+bunx expo-builder build preview ios --remote
+```
+
+## Configuration
+
+`expo-builder.json` at your project root. The minimum is one line:
+
+```json
+{ "mac": "user@your-mac" }
+```
+
+Everything else is auto-detected: the Expo project directory, the app slug, the project root, and the remote paths on the Mac.
+
+Full form:
+
 ```json
 {
-  "scripts": {
-    "eas": "bun run eas-builder/scripts/eas.ts"
-  }
+  "$schema": "https://unpkg.com/expo-builder/schema.json",
+  "mac": {
+    "host": "your-mac",
+    "user": "you",
+    "sshKey": "~/.ssh/id_ed25519",
+    "tartHome": "/Volumes/BuildSSD/.tart"
+  },
+  "mobileDir": "mobile",
+  "syncPaths": ["shared"],
+  "vm": { "xcode": "auto", "name": "expo-builder", "keepImages": "auto" },
+  "cache": { "enabled": true, "budgetGB": 15 }
 }
 ```
 
-### 2. Configure
+| Field | Default | Meaning |
+|---|---|---|
+| `mac` | required | `"user@host"` or an object |
+| `mac.sshKey` | auto | Probes `~/.ssh/id_ed25519`, `id_rsa`, `id_ecdsa` |
+| `mac.tartHome` | `~/.tart` | Relocate VM storage. **Must be APFS** — see [Storage](#storage-on-the-mac) |
+| `mobileDir` | auto | Detected from `eas.json` + `app.json`/`app.config.*` |
+| `syncPaths` | `[]` | Extra directories to sync beyond the mobile dir and its workspace deps |
+| `vm.xcode` | `"auto"` | `"auto"`, `"latest"`, or an exact version |
+| `vm.keepImages` | `"auto"` | Derived from free disk; 1 below 150 GB free, up to 3 above |
+| `cache.budgetGB` | `15` | Shared dependency cache ceiling on the Mac |
+
+**`EXPO_TOKEN` never goes in this file.** It is read from the environment, then `.env` at the project root or mobile dir, then `~/.expo-builder/env`.
+
+## Commands
+
+| Command | Description |
+|---|---|
+| `build [profile] [platform]` | Build on EAS Cloud, or in a Tart VM with `--remote` |
+| `submit [profile] [platform]` | Submit an existing build to the stores |
+| `deploy [profile] [platform]` | Build then submit |
+| `update [profile] -m <msg>` | OTA update, no native rebuild |
+| `run <android\|ios>` | Local build + install on a connected device |
+| `init` | Scaffold config, verify SSH |
+| `doctor` | Check the Mac, image, SDK compatibility, and disk |
+| `clean` | Report and reclaim disk on the Mac |
+| `vm <list\|rebuild\|delete\|migrate>` | Manage the Tart image |
+| `logs [--last]` | Show build logs |
+
+Profiles are `development`, `preview`, `production`. Platforms are `android`, `ios`, `all`.
+
+Key flags: `--remote`, `--cloud`, `--no-optimize`, `--no-cache`, `--dry-run`, `--json`, `--yes`, `--xcode <v>`, `--project <path>`, `--ssh-key <path>`.
+
+## How image selection works
+
+`vm.xcode` defaults to `"auto"`, which targets **the Xcode that EAS Cloud uses for your Expo SDK** — not the newest available.
+
+That distinction matters. Expo documents that [SDKs support Xcode only *up to* a specific version](https://github.com/expo/fyi/blob/main/expo-sdk-xcode-compatibility.md), and a newer one may fail. SDK 54, for example, has a floor of Xcode 16.1 but EAS builds it on 26.0 — so "newest wins" would be wrong.
+
+Resolution reads your SDK from `package.json`, lists available tags from both `macos-tahoe-xcode` and `macos-sequoia-xcode` on ghcr (anonymously, no credentials), discards pre-releases, and picks the newest tag within `[floor, EAS default]`.
+
+`doctor` tells you when a rebuild is warranted. Tag data is cached in `~/.expo-builder/compat.json` with a 24-hour TTL, so builds never block on the network; `doctor --refresh` forces a refresh.
+
+## Storage on the Mac
+
+A provisioned image plus its share of the retained base costs roughly **92 GB per Xcode version**. Budget about 25 GB more for a build in flight and up to 15 GB for the shared cache.
+
+- **The Tart OCI cache is retained, not pruned.** `tart clone` uses APFS `clonefile(2)`, so the pulled base and the local image share disk extents — pruning the cache typically frees only a few GB while costing a ~62 GB re-download on the next rebuild. `clean --deep` prunes it explicitly when you genuinely need the space.
+- **Image slimming.** Provisioning removes simulator runtimes and non-iOS platforms, since this tool only ever produces device and store archives.
+- **Preflight.** Before each remote build, free space is checked; the safe parts of `clean` run automatically if short, and the build is refused with a breakdown rather than dying halfway through.
+- **The synced directory only ever holds source.** Builds run on the VM's own disk, and artifacts land in `~/.expo-builder/artifacts/<slug>/`.
+
+### External volumes
+
+Set `mac.tartHome` to move storage off the internal disk. Two hard requirements:
+
+1. **APFS.** `clonefile(2)` is APFS-only. On exFAT or HFS+ every `tart clone` becomes a full ~80 GB byte copy. This is rejected outright.
+2. **Ownership enabled.** External volumes ignore ownership by default, which makes Tart fail with permission errors. Fix with `sudo diskutil enableOwnership /Volumes/<name>`.
+
+An **SSD** is strongly recommended — VM builds are random-I/O heavy and a spinning disk will be markedly slower. A 1 TB NVMe over USB 3.2 Gen 2 comfortably holds three images.
 
 ```bash
-cp eas-builder/.env.example eas-builder/.env
+expo-builder vm migrate --to /Volumes/BuildSSD/.tart
 ```
 
-Edit `eas-builder/.env`:
+## Build optimizations
 
-```env
-PROJECT_NAME=my-app
+On by default; disable with `--no-optimize`.
 
-# Path to your project root, relative to this directory
-PROJECT_ROOT=..
+**Android** — via `GRADLE_USER_HOME` inside the VM: dynamic JVM heap (`RAM − 2 GB`), `MaxMetaspaceSize=512m`, `workers.max=2`, `arm64-v8a` only, and `lintVital` disabled (it OOMs on large RN projects).
 
-# Path to the Expo project, relative to PROJECT_ROOT
-# Use "." if the project root IS the Expo project
-PROJECT_MOBILE_DIR=mobile
+**iOS** — via an auto-injected Expo config plugin: `COMPILER_INDEX_STORE_ENABLE=NO` and `DEBUG_INFORMATION_FORMAT=dwarf` for non-production. No change to your `app.config.ts` is needed.
 
-# SSH credentials for the Mac
-REMOTE_BUILDER_USER=john
-REMOTE_BUILDER_HOST=192.168.1.50
-REMOTE_BUILDER_PATH=~/eas/my-app
+## Version management
 
-# Expo access token
-EXPO_TOKEN=expo_xxxxxxxxxxxxx
-```
+Set `appVersionSource` to `"remote"` in `eas.json`. For remote builds the tool fetches the current version with `eas build:version:get`, increments it, and sets it after a successful build — `--local` does not auto-increment the way cloud builds do.
 
-### 3. SSH key
-
-rsync needs a key file (it can't use the SSH agent on all platforms). Copy your private key — permissions are set automatically before each build.
+## Migrating from the submodule
 
 ```bash
-cp ~/.ssh/id_ed25519 eas-builder/.ssh-key/id
+git rm -r eas-builder
+bun add -d expo-builder
+bunx expo-builder init
+bunx expo-builder vm rebuild
 ```
 
-The key must match an entry in `~/.ssh/authorized_keys` on the Mac.
-
-### 4. Build
+`init` replaces `.env`, and the `.ssh-key/id` copy is no longer needed — your existing `~/.ssh` key is used. The legacy Tart image is detected by `doctor`; renaming it is free thanks to APFS cloning:
 
 ```bash
-# Interactive — walks you through every option
-bun eas
-
-# Or go direct
-bun eas build preview ios --remote
+tart clone eas-builder expo-builder && tart delete eas-builder
 ```
 
-## Usage
+`clean` offers to remove the old `~/eas/<name>` sync directories.
 
-### Interactive Mode
+## Requirements
 
-```bash
-bun eas
-```
-
-Presents a menu: Build, Submit, Build + Submit, OTA Update, Run. Each option walks you through profile, platform, and build location selection.
-
-### Non-Interactive (CI-friendly)
-
-```bash
-# Build
-bun eas build preview ios --remote         # iOS in Tart VM
-bun eas build preview android --remote     # Android in Tart VM
-bun eas build preview all --remote         # Both (sequential)
-bun eas build preview ios                  # iOS on EAS Cloud
-
-# Build + Submit to stores
-bun eas deploy production ios --remote
-bun eas deploy production all --remote
-
-# Submit latest existing build
-bun eas submit preview
-
-# OTA update (JS-only, no native rebuild)
-bun eas update preview "bug fixes"
-
-# Local build + install on device (macOS/Linux only)
-bun eas run android
-bun eas run ios
-```
-
-### Flags
-
-| Flag | Description |
-|------|-------------|
-| `--remote` | Build in Tart VM on your Mac instead of EAS Cloud |
-| `--no-optimize` | Skip build optimizations (useful for debugging build issues) |
-
-## Build Optimizations
-
-Enabled by default for remote builds. Disable with `--no-optimize`.
-
-### Android
-Applied via `~/.gradle/` files inside the VM (no project changes needed):
-- **JVM memory**: dynamically set to `(VM RAM - 2GB)` with `MaxMetaspaceSize=512m`
-- **Workers**: limited to 2 (prevents OOM on constrained VMs)
-- **Architecture**: `arm64-v8a` only (no x86 emulator builds)
-- **Lint**: `lintVital` tasks disabled via `init.gradle` (they OOM on large RN projects)
-
-### iOS
-Applied via an Expo config plugin (`plugins/withBuildOptimizations.js`):
-- **Index store disabled**: `COMPILER_INDEX_STORE_ENABLE=NO` (IDE-only feature)
-- **dSYM skipped**: `DEBUG_INFORMATION_FORMAT=dwarf` for non-production (faster, less memory)
-
-Fully automatic — no changes needed in your `app.config.ts`. During remote builds, the plugin is copied to the project's `plugins/` directory and injected into the config via a build-time wrapper.
-
-## Version Management
-
-Set `appVersionSource` to `"remote"` in your `eas.json` so EAS manages `versionCode` (Android) and `buildNumber` (iOS) server-side.
-
-For remote builds, the script:
-1. Runs the build with `eas build --local`
-2. Fetches the current version with `eas build:version:get`
-3. Increments it and sets it with `eas build:version:set`
-
-This is necessary because `--local` doesn't auto-increment like cloud builds do.
-
-## VM Lifecycle
-
-Each remote build follows this lifecycle:
-
-1. **Clone** — `tart clone eas-builder build-<timestamp>` (~30s)
-2. **Configure** — allocate CPU (cores - 2) and memory (RAM - 4GB) to the VM
-3. **Boot** — `tart run` with project directory mounted (~20s)
-4. **Build** — SSH into VM, pull credentials, install deps, run EAS build
-5. **Cleanup** — `tart stop` + `tart delete` (VM is gone)
-
-If a build is interrupted (Ctrl+C), the cleanup runs automatically. If the process is killed, stale VMs are cleaned up at the start of the next build.
-
-## Logs
-
-All build output (unfiltered) is saved to:
-
-```
-logs/<platform>-<profile>-<timestamp>.log
-```
-
-The terminal shows filtered, deduplicated output with progress spinners. Check the log file for full details when debugging.
-
-## Project Structure
-
-```
-eas-builder/                       # submodule in your project
-├── scripts/
-│   ├── eas.ts                     # Main CLI entry point
-│   └── setup-tart.ts              # One-time VM setup
-├── plugins/
-│   └── withBuildOptimizations.js   # iOS Xcode config plugin (auto-injected)
-├── .ssh-key/
-│   ├── id                         # Your SSH private key (gitignored)
-│   └── README.md
-├── .env                           # Your config (gitignored)
-├── .env.example                   # Config template
-├── package.json                   # Dependencies (@clack/prompts, ignore)
-├── CLAUDE.md                      # AI assistant context
-└── README.md                      # This file
-```
-
-## Manual Installation
-
-If you prefer not to use a submodule, you can copy the files directly into your project:
-
-1. Copy `scripts/eas.ts`, `scripts/setup-tart.ts`
-2. Copy `.ssh-key/README.md` and create `.ssh-key/` directory
-3. Add to your `package.json`:
-   ```json
-   {
-     "scripts": {
-       "eas": "bun run scripts/eas.ts",
-       "setup": "bun run scripts/setup-tart.ts"
-     },
-     "devDependencies": {
-       "@clack/prompts": "^1.0.1",
-       "ignore": "^7.0.5"
-     }
-   }
-   ```
-4. Add to your `.gitignore`:
-   ```
-   .ssh-key/*
-   !.ssh-key/README.md
-   logs/
-   ```
-5. Add the env vars from `.env.example` to your `.env`
-6. Set `PROJECT_ROOT=.` and `PROJECT_MOBILE_DIR` to match your project structure
+- **Your machine**: SSH and rsync. Windows needs cwRsync (`choco install rsync`) — Win32-OpenSSH is incompatible with rsync's binary protocol. Bun or Node 20+.
+- **The Mac**: Apple Silicon, Homebrew, SSH access. Everything else is installed by `vm rebuild`.
+- **Expo**: an account, an access token, and `eas.json` in your project.
 
 ## Troubleshooting
 
-### "Could not find cwRsync's bundled ssh.exe" (Windows only)
-Install rsync: `choco install rsync`. The script needs cwRsync's cygwin SSH (Win32-OpenSSH is incompatible with rsync's binary protocol).
+**"Could not find cwRsync's bundled ssh.exe"** — `choco install rsync`.
 
-### "SSH key not found at .ssh-key/id"
-Copy your private key: `cp ~/.ssh/id_ed25519 eas-builder/.ssh-key/id`. Permissions are set automatically.
+**"Permission denied (publickey)"** — the key must match an entry in `~/.ssh/authorized_keys` on the Mac. Check with `ssh user@mac echo ok`.
 
-### "Permission denied (publickey)" on rsync
-The key at `eas-builder/.ssh-key/id` must match an entry in `~/.ssh/authorized_keys` on the Mac. Verify with `ssh -i eas-builder/.ssh-key/id user@mac echo ok`.
+**"VM failed to boot within 90 seconds"** — check that no other VM is running: `expo-builder vm list`.
 
-### "VM failed to boot within 90 seconds"
-The Mac may not have enough resources. Check that no other VMs are running: `ssh user@mac "tart list"`.
+**Gradle OOM** — optimizations are on by default; if it still OOMs the Mac likely lacks RAM. 16 GB+ recommended.
 
-### "Tart VM not set up"
-Run `bun eas build --remote` — it will prompt to run setup automatically. Or run `bun run eas-builder/scripts/setup-tart.ts` directly.
-
-### Gradle OOM during Android build
-This is why optimizations are on by default. If you're still hitting OOM, your Mac may not have enough RAM. The script allocates `(total RAM - 4GB)` to the VM. 8GB minimum recommended, 16GB+ preferred.
-
-### Build works on EAS Cloud but fails remotely
-Check `logs/` for the full output. Common causes:
-- Missing environment variables — make sure `eas env:pull` has the right secrets
-- Different Xcode version — set `TART_XCODE_VERSION` in `.env` to match your EAS cloud image
-- Missing native dependencies — rebuild the VM image with `bun run eas-builder/scripts/setup-tart.ts`
+**Build works on EAS Cloud but fails remotely** — run `expo-builder doctor`; an Xcode mismatch against your SDK is the usual cause. Check `logs/` for full output.
 
 ## License
 

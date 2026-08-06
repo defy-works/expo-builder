@@ -12,10 +12,6 @@ dist/
 # Temp (build scripts)
 .temp/
 
-# SSH key for remote Mac builds (README.md is tracked)
-.ssh-key/*
-!.ssh-key/README.md
-
 # Build logs
 logs/
 

@@ -1,169 +1,95 @@
 # expo-builder
 
-Build system for Expo/React Native projects. Builds iOS and Android apps in ephemeral Tart VMs on a remote Mac via SSH from any OS (Windows, macOS, or Linux).
+An npm-published CLI that builds Expo/React Native projects in ephemeral Tart VMs on a remote Mac, over SSH, from any OS. Also wraps EAS Cloud builds, store submission, OTA updates, and local device installs.
 
-Installed as a git submodule (`eas-builder/`) inside the host project. Can also be copied manually (see README "Manual Installation").
+## What this is
 
-## What This Is
-
-A reusable CLI tool that wraps EAS CLI with:
-- **Interactive prompts** — `bun eas` for guided build/submit/deploy/update flows
-- **Remote Mac builds via Tart VMs** — ephemeral macOS VMs on Apple Silicon, no dependency drift
-- **EAS Cloud builds** — standard cloud builds as fallback
-- **Store submission** — submit builds to App Store / Play Store
-- **OTA updates** — push JS bundle updates via EAS Update
-- **Local build + install** — build and install on connected device
-
-## TOOL_ROOT vs PROJECT_ROOT
-
-- **TOOL_ROOT** (`import.meta.url` → `scripts/..`) — where expo-builder itself lives. Used for: `.ssh-key/id`, `scripts/setup-tart.ts`, `plugins/`, and `.env`.
-- **PROJECT_ROOT** (`.env` → `PROJECT_ROOT`, resolved relative to TOOL_ROOT) — the project being built. Used for: source files, `logs/`, `.gitignore`, rsync root.
-
-All config lives in `TOOL_ROOT/.env`. `PROJECT_ROOT` is a relative path in that `.env` — typically `..` (submodule pointing to parent) or `.` (manual install where tool IS the project).
+A **package**, not a submodule. Consumers install it (`bun add -d expo-builder`, `bunx expo-builder`, or globally) and configure it with an `expo-builder.json` in *their* project. This tool's own directory holds no user config.
 
 ## Architecture
 
 ```
-Your machine (scripts/eas.ts)
+Your machine (src/cli.ts)
   │
-  ├─ rsync ──────────► Mac host ~/eas/<project>/
+  ├─ rsync (--delete, scoped) ──► Mac ~/.expo-builder/projects/<slug>/
   │
-  └─ ssh ────────────► Mac host
-                         │
-                         ├─ tart clone eas-builder build-<ts>
-                         ├─ tart run --dir=<name>:<path> build-<ts>
-                         ├─ ssh admin@<vm-ip> ──► Tart VM
-                         │     ├─ eas env:pull (credentials from EAS)
-                         │     ├─ eas build:version:get + increment
-                         │     ├─ bun install && eas build --local
-                         │     └─ (deploy: eas submit --path <artifact>)
-                         ├─ tart stop build-<ts>
-                         └─ tart delete build-<ts>
+  └─ ssh ───────────────────────► bash on the Mac host
+                                    ├─ stale VM sweep (skips running / live-PID VMs)
+                                    ├─ tart clone <image> expo-builder-build-$$-<ts>
+                                    ├─ tart run --dir=<slug>:<path>:ro --dir=cache:<path>
+                                    ├─ ssh admin@<vm-ip> ──► inside the VM
+                                    │     ├─ rsync mount → ~/work  (build off the mount)
+                                    │     ├─ eas env:pull / bun install
+                                    │     ├─ eas build --local --output ~/out/app.<ext>
+                                    │     └─ eas submit (deploy only)
+                                    ├─ scp artifact → ~/.expo-builder/artifacts/<slug>/
+                                    └─ trap cleanup EXIT INT TERM HUP → stop, wait, delete
 ```
 
-Each build gets a fresh clone of a pre-configured VM image. No state carries over between builds.
+## Module layout
 
-## Files
+| Path | Responsibility |
+|---|---|
+| `src/cli.ts` | Entry: parse → dispatch → format errors → exit code |
+| `src/args.ts` | Parser, help text. **Rejects unknown flags** |
+| `src/errors.ts` | `UsageError` (exit 1) / `BuildError` (exit 2) |
+| `src/config.ts` | Discovery, merging, validation, `remotePaths()` |
+| `src/compat.ts` | SDK requirement table, version compare, image resolution, ghcr tags |
+| `src/compat-cache.ts` | 24h TTL cache so builds never block on the network |
+| `src/remote/markers.ts` | `::marker::` protocol parsing |
+| `src/remote/sync.ts` | Sync-set computation, workspace deps, rsync args |
+| `src/remote/storage.ts` | `diskutil` parsing, volume validation, image retention |
+| `src/remote/vm-script.ts` | Bash that runs **inside** the VM (pure function) |
+| `src/remote/host-script.ts` | Bash that runs on the **Mac host** (pure function) |
+| `src/remote/ssh.ts` | SSH helpers, key discovery, cygwin path conversion |
+| `src/ui/` | Output filtering and phase spinners |
+| `src/commands/` | One file per command |
+| `src/setup/tart.ts` | Image provisioning, slimming, `image.json` |
 
-```
-eas-builder/                         # submodule in host project
-├── CLAUDE.md                        # This file
-├── README.md                        # User-facing documentation
-├── .env.example                     # Configuration template
-├── .env                             # Config (gitignored)
-├── .gitignore
-├── package.json                     # Dependencies (@clack/prompts, ignore)
-├── tsconfig.json                    # TypeScript config (IDE support)
-├── LICENSE                          # MIT license
-├── scripts/
-│   ├── eas.ts                       # Main CLI — build, submit, deploy, update, run
-│   └── setup-tart.ts                # One-time Tart VM setup on remote Mac
-├── plugins/
-│   └── withBuildOptimizations.js     # iOS config plugin (auto-injected at build time)
-└── .ssh-key/
-    ├── README.md                    # SSH key setup instructions
-    └── id                           # SSH private key (gitignored)
-```
+`host-script.ts` and `vm-script.ts` are **pure string generation with no I/O**, which is what makes the riskiest code testable. They have golden-file snapshots plus explicit assertions.
 
-## Setup
+## Config resolution
 
-### Prerequisites
-- **Any OS** (Windows, macOS, or Linux) with Bun, SSH, and rsync
-  - Windows: `choco install rsync` (cwRsync)
-  - macOS: `brew install rsync` (or use built-in)
-  - Linux: `sudo apt install rsync`
-- **Remote Mac** (Apple Silicon) with SSH access and Homebrew
-- **Expo account** with `EXPO_TOKEN`
+Precedence, highest first: CLI flags → `expo-builder.json` (project root) → `~/.expo-builder/config.json` → auto-detection → defaults.
 
-### 1. Configure
+Auto-detected: mobile dir (cwd if it has `eas.json` + `app.json`/`app.config.*`, else one level below the git root), slug (Expo `slug` → package name → dir name), project root (git toplevel), remote paths.
 
-Copy `.env.example` to `.env` and fill in. Key fields:
+`EXPO_TOKEN` resolves from env → project `.env` → mobile `.env` → `~/.expo-builder/env`. **Never** from `expo-builder.json`.
 
-| Field | Description | Example |
-|-------|-------------|---------|
-| `PROJECT_NAME` | VM mount name, temp file prefix, CLI label | `my-app` |
-| `PROJECT_ROOT` | Path to host project, relative to this dir | `..` |
-| `PROJECT_MOBILE_DIR` | Expo project path, relative to PROJECT_ROOT | `mobile` or `.` |
-| `REMOTE_BUILDER_USER` | SSH username for Mac | `john` |
-| `REMOTE_BUILDER_HOST` | SSH host for Mac | `192.168.1.50` |
-| `REMOTE_BUILDER_PATH` | Working directory on Mac | `~/eas/my-app` |
-| `EXPO_TOKEN` | EAS CLI auth token | `expo_xxx` |
+## Image selection
 
-### 2. SSH Key
+`vm.xcode: "auto"` targets the Xcode **EAS Cloud uses for the project's SDK**, bounded below by Expo's published floor. Deliberately *not* newest-wins: Expo documents that an Xcode newer than an SDK supports may fail. SDK 54 is the motivating case — floor 16.1, EAS default 26.0.
 
-Place your SSH private key at `.ssh-key/id`. Permissions are set automatically before each build.
+Both `macos-tahoe-xcode` and `macos-sequoia-xcode` must be searched; SDK 57 wants Xcode 26.6, which exists only on sequoia.
 
-### 3. Install Dependencies
+`compat.ts` is seeded only with **verified** entries. Add new SDKs from Expo's docs, never by guessing. Unknown SDKs warn rather than block.
 
-```bash
-cd eas-builder && bun install
-```
+## Storage model
 
-## Usage
+- **The OCI cache is retained, not pruned.** `tart clone` uses `clonefile(2)`, so the cache and local image share extents; pruning frees little but costs a ~62 GB re-download. `clean --deep` is the explicit escape hatch.
+- **Slimming and retention interact.** Deleting files in the clone does not free blocks the cache still references, so slimming only reclaims space once the cache is dropped. Do not "fix" one without considering the other.
+- Cache is **shared across projects**, not per-slug — these caches are content-addressed, so per-project copies would duplicate.
+- Preflight refuses or auto-cleans rather than dying mid-build.
 
-```bash
-# Interactive mode
-bun eas
+## Invariants — do not undo
 
-# Non-interactive
-bun eas build preview ios --remote        # Build in Tart VM
-bun eas build preview android             # Build on EAS Cloud
-bun eas deploy production all --remote    # Build in VM + submit to stores
-bun eas submit preview                    # Submit latest build to stores
-bun eas update preview "fix bug"          # OTA update
-bun eas run android                       # Local build + install
+1. **`trap cleanup EXIT INT TERM HUP` is registered before `tart clone`**, guarded by `VM_CREATED`. Bash skips EXIT traps on untrapped SIGHUP, so omitting HUP leaks VMs on SSH disconnect.
+2. **Teardown reports failure.** `tart delete` retries and emits `::error::`; never swallow it with `|| true`.
+3. **The stale sweep checks `Running` and PID liveness**, so it cannot destroy a concurrent build.
+4. **Remote paths carry a literal `$HOME`, not `~`.** They are used inside double quotes in bash, where `~` does not expand.
+5. **`planImageEviction` lives in `remote/storage.ts`**, re-exported from `commands/vm.ts`, to avoid a cycle with `setup/tart.ts`.
+6. **The user's SSH key is never modified.** Normalization writes a copy to `~/.expo-builder/ssh/`.
+7. **`EAS_NO_VCS=1`** replaces the old per-build `git init`; EAS packages the project itself and honours `.gitignore`/`.easignore`.
+8. **Builds happen on the VM's own disk**, never in the mounted directory, which is mounted `:ro`.
 
-# Flags
---remote        # Use Tart VM on remote Mac instead of EAS Cloud
---no-optimize   # Skip build optimizations (Gradle tuning, iOS dSYM skip)
-```
+## Conventions
 
-## iOS Build Optimizations Plugin
+- **Runtime**: Bun for development (`bun test`, `bun build`); the published bundle targets Node 20+.
+- **Language**: TypeScript, strict, `noUncheckedIndexedAccess`.
+- **CLI UI**: `@clack/prompts`, bundled into `dist/` so the package has zero runtime deps.
+- **Tests**: `bun test`. Pure logic is unit-tested; bash generation is snapshot-tested.
 
-Fully automatic — no changes needed in the project's `app.config.ts`.
+## Reference
 
-When optimizations are enabled (the default, disable with `--no-optimize`):
-1. The plugin file (`plugins/withBuildOptimizations.js`) is copied to the project's `plugins/` dir on the Mac
-2. `app.config.ts` is wrapped with a thin module that imports the original config and appends the plugin
-
-The plugin:
-- Disables Xcode index store (saves memory, IDE-only feature)
-- Skips dSYM generation for non-production builds
-
-Android optimizations (Gradle memory limits, lint disabling) are applied via `~/.gradle/` files inside the VM — no plugin needed.
-
-## Key Concepts
-
-### Tart VMs
-- [Tart](https://tart.run/) runs macOS VMs on Apple Silicon via Apple's Virtualization.framework
-- Each build clones a frozen `eas-builder` image → fresh environment every time
-- VMs are ephemeral: cloned, used, deleted after each build
-- Stale VMs from interrupted builds are cleaned up automatically
-
-### Phase Markers Protocol
-The shell scripts emit structured markers (`::phase::`, `::boot-wait::`, `::vm-ip::`, `::version::`, `::error::`, `::stale::`, `::vm-resources::`) that the Node.js side parses to drive `@clack/prompts` spinners.
-
-### Version Management
-- `appVersionSource` should be `"remote"` in `eas.json` — EAS manages build numbers server-side
-- For `--remote` builds: version is fetched via `eas build:version:get`, incremented, and set via `eas build:version:set` after a successful build
-- `eas build:version:set` only accepts piped input: `echo "$NEXT" | eas build:version:set`
-
-### VM Resource Allocation
-The Mac host script dynamically allocates CPU and memory to the VM:
-- CPU: total cores - 2 (minimum: all cores if ≤ 4)
-- Memory: total MB - 4096 (minimum: all memory if ≤ 8GB)
-
-### Build Optimizations (opt-in via `--no-optimize` to disable)
-- **Android**: Dynamic JVM memory (`RAM - 2GB`), `MaxMetaspaceSize=512m`, `workers.max=2`, disable `lintVital` tasks via init.gradle
-- **iOS**: Disable Xcode index store, skip dSYM for non-production (via config plugin, auto-injected)
-
-### Logs
-All build output is saved to `logs/<platform>-<profile>-<timestamp>.log` for debugging. The console shows filtered, deduplicated output with `│` bar formatting.
-
-## Coding Conventions
-
-- **Runtime**: Bun (use `bun` / `bunx`, never `npm` / `npx`)
-- **Language**: TypeScript
-- **CLI UI**: `@clack/prompts` for spinners, selects, confirms
-- **File sync**: `ignore` library for .gitignore/.easignore parsing
-- **SSH**: system `ssh` for commands; rsync uses cwRsync's cygwin SSH on Windows, system `ssh` on macOS/Linux
+- Design spec: `docs/superpowers/specs/2026-08-06-expo-builder-redesign-design.md`
+- Implementation plan: `docs/superpowers/plans/2026-08-06-expo-builder-redesign.md`
