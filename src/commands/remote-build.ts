@@ -12,7 +12,16 @@ import {
   findCwrsyncSsh, loginWrap, type SshTarget,
 } from "../remote/ssh";
 import { resolveWorkspaceDeps, computeSyncRoots, collectFiles, buildRsyncArgs } from "../remote/sync";
-import { generateVmScript } from "../remote/vm-script";
+import {
+  generateVmScript, DEFAULT_OPTIMIZE, NO_OPTIMIZE, type OptimizeFlags,
+} from "../remote/vm-script";
+import type { Flags } from "../args";
+
+/** Map CLI flags onto the granular optimization set. */
+export function optimizeFlagsFrom(flags: Pick<Flags, "optimize" | "ccache">): OptimizeFlags {
+  if (!flags.optimize) return NO_OPTIMIZE;
+  return { ...DEFAULT_OPTIMIZE, ccache: flags.ccache };
+}
 import { generateHostScript } from "../remote/host-script";
 import { parseMarker } from "../remote/markers";
 import { OutputFilter, showLine, showBar } from "../ui/output";
@@ -27,7 +36,7 @@ export interface RemoteBuildOptions {
   profile: Profile;
   platform: Platform;
   submit: boolean;
-  optimize: boolean;
+  optimize: OptimizeFlags;
   cache: boolean;
   dryRun: boolean;
   download?: string;
@@ -160,7 +169,27 @@ export async function runRemoteBuild(opts: RemoteBuildOptions): Promise<number> 
     }
     s.stop(`Synced ${files.length} files`);
 
-    if (optimize) {
+    // set-version.ts is required on every remote build: `eas build:version:set`
+    // cannot be scripted on EAS CLI v18+.
+    {
+      const here = dirname(fileURLToPath(import.meta.url));
+      const setVersionSrc = [
+        resolve(here, "..", "..", "scripts", "set-version.ts"),
+        resolve(here, "..", "scripts", "set-version.ts"),
+      ].find((c) => existsSync(c));
+      if (!setVersionSrc) {
+        throw new BuildError(
+          "Could not locate set-version.ts in the expo-builder package.",
+          "This is required to set the remote build version. Reinstall expo-builder.",
+        );
+      }
+      spawnSync("ssh", [sshTargetString(target), `cat > ${paths.project}/set-version.ts`], {
+        stdio: ["pipe", "pipe", "pipe"],
+        input: readFileSync(setVersionSrc, "utf-8"),
+      });
+    }
+
+    if (optimize.indexStore || optimize.skipDsym || optimize.ccache) {
       const here = dirname(fileURLToPath(import.meta.url));
       const candidates = [
         resolve(here, "..", "..", "plugins", "withBuildOptimizations.js"),

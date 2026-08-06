@@ -81,6 +81,13 @@ Both `macos-tahoe-xcode` and `macos-sequoia-xcode` must be searched; SDK 57 want
 6. **The user's SSH key is never modified.** Normalization writes a copy to `~/.expo-builder/ssh/`.
 7. **`EAS_NO_VCS=1`** replaces the old per-build `git init`; EAS packages the project itself and honours `.gitignore`/`.easignore`.
 8. **Builds happen on the VM's own disk**, never in the mounted directory, which is mounted `:ro`.
+9. **`bun install` runs before `eas env:pull`.** `env:pull` evaluates `app.config.ts`, which may reference plugins (e.g. `@sentry/react-native/expo`) that need `node_modules`. Reversing these breaks the pull on a fresh VM.
+10. **`bun install --backend=copyfile` whenever the cache is mounted.** bun defaults to `clonefile` on macOS, which fails across VirtioFS.
+11. **The config plugin is injected in place**, by inserting into the `plugins` array — never via a wrapper module. `@expo/config`'s require resolution cannot resolve `.ts` imports from a wrapper, which silently breaks config evaluation.
+12. **Version setting goes through `scripts/set-version.ts`** (GraphQL `createAppVersion`), never `eas build:version:set`, which is interactive-only on EAS CLI v18+. The CLI path fails silently: build succeeds, version never set, next build reuses the number.
+13. **ccache, not DerivedData.** EAS copies the project to a fresh temp dir each build, changing the DerivedData path. ccache is keyed on content hash, so it survives. Requires `ccache` in the image and the `/tmp/ccache-bin` wrappers the plugin expects.
+
+Invariants 9–13 were recovered from upstream work that the package rewrite initially reverted. Each represents a real failure found in production; do not "simplify" them away.
 
 ## Conventions
 

@@ -20,6 +20,7 @@ export interface Flags {
   remote: boolean;
   cloud: boolean;
   optimize: boolean;
+  ccache: boolean;
   cache: boolean;
   dryRun: boolean;
   deep: boolean;
@@ -58,6 +59,7 @@ const BOOLEAN_FLAGS: Record<string, keyof Flags> = {
 /** Flags that invert a default-true value. */
 const NEGATED_FLAGS: Record<string, keyof Flags> = {
   "--no-optimize": "optimize",
+  "--no-ccache": "ccache",
   "--no-cache": "cache",
 };
 
@@ -109,7 +111,7 @@ function suggest(input: string, candidates: string[]): string | undefined {
 export function parseArgs(argv: string[]): ParsedArgs {
   const flags: Flags = {
     help: false, version: false, json: false, verbose: false, yes: false,
-    remote: false, cloud: false, optimize: true, cache: true,
+    remote: false, cloud: false, optimize: true, ccache: true, cache: true,
     dryRun: false, deep: false, refresh: false, last: false,
   };
 
@@ -268,7 +270,8 @@ Global flags:
 Build flags:
       --remote         Build in a Tart VM on your Mac
       --cloud          Build on EAS Cloud
-      --no-optimize    Skip build optimizations
+      --no-optimize    Skip all build optimizations
+      --no-ccache      Skip ccache only (keeps other optimizations)
       --no-cache       Skip the shared dependency cache
       --dry-run        Print what would happen without doing it
       --download <p>   Also download the artifact locally

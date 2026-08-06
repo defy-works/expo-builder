@@ -136,15 +136,25 @@ expo-builder vm migrate --to /Volumes/BuildSSD/.tart
 
 ## Build optimizations
 
-On by default; disable with `--no-optimize`.
+On by default. `--no-optimize` disables all of them; `--no-ccache` disables only ccache.
 
-**Android** — via `GRADLE_USER_HOME` inside the VM: dynamic JVM heap (`RAM − 2 GB`), `MaxMetaspaceSize=512m`, `workers.max=2`, `arm64-v8a` only, and `lintVital` disabled (it OOMs on large RN projects).
+**Android** — `~/.gradle` config inside the VM: dynamic JVM heap (`RAM − 2 GB`), `MaxMetaspaceSize=512m`, `workers.max=2`, `arm64-v8a` only, and `lintVital` disabled (it OOMs on large RN projects).
 
-**iOS** — via an auto-injected Expo config plugin: `COMPILER_INDEX_STORE_ENABLE=NO` and `DEBUG_INFORMATION_FORMAT=dwarf` for non-production. No change to your `app.config.ts` is needed.
+**iOS** — an Expo config plugin injected into your `plugins` array at build time: `COMPILER_INDEX_STORE_ENABLE=NO`, `DEBUG_INFORMATION_FORMAT=dwarf` for non-production, and `CC`/`CXX` pointed at ccache wrappers. No change to your `app.config.ts` is needed, and the injection is discarded with the VM.
+
+**ccache** caches compiled C/C++/ObjC objects by content hash. That matters because EAS copies the project to a fresh temp directory on every build, which changes the DerivedData path — so DerivedData cannot usefully be cached, but ccache can.
+
+## Caching
+
+The shared cache lives at `~/.expo-builder/cache` on the Mac and is mounted into the VM, with `~/.bun/install/cache`, `~/.gradle/caches`, `~/Library/Caches/CocoaPods` and `~/.ccache` symlinked into it.
+
+`bun install` runs with `--backend=copyfile` whenever the cache is mounted: bun defaults to `clonefile` on macOS, which fails across a VirtioFS boundary.
 
 ## Version management
 
-Set `appVersionSource` to `"remote"` in `eas.json`. For remote builds the tool fetches the current version with `eas build:version:get`, increments it, and sets it after a successful build — `--local` does not auto-increment the way cloud builds do.
+Set `appVersionSource` to `"remote"` in `eas.json`. For remote builds the tool reads the current version with `eas build:version:get`, increments it, and sets it after a successful build — `--local` does not auto-increment the way cloud builds do.
+
+Setting it goes through the Expo GraphQL `createAppVersion` mutation rather than `eas build:version:set`, which is interactive-only on EAS CLI v18+ (no `--version`, no `--non-interactive`). Scripting the CLI command leaves a nasty failure: the build compiles, the version silently never gets set, and the next build reuses the same number.
 
 ## Migrating from the submodule
 

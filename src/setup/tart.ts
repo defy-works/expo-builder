@@ -98,7 +98,10 @@ export function provisionSteps(cfg: ProvisionStepConfig): ProvisionStep[] {
         `yes | $SDKMANAGER --sdk_root="$ANDROID_HOME" "platforms;${cfg.androidPlatform}" "build-tools;${cfg.androidBuildTools}" "platform-tools" "ndk;${cfg.androidNdk}"`,
       ].join(" && "),
     },
-    { label: "Installing CocoaPods and Fastlane", command: "brew install cocoapods fastlane" },
+    // ccache is required by the iOS build cache path: the plugin points CC/CXX
+    // at wrapper scripts around it, and DerivedData cannot be cached because
+    // EAS copies the project to a fresh temp dir each build.
+    { label: "Installing CocoaPods, Fastlane and ccache", command: "brew install cocoapods fastlane ccache" },
     { label: "Installing eas-cli and dotenv-cli", command: "$HOME/.bun/bin/bun install -g eas-cli dotenv-cli" },
   ];
 }

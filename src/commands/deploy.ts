@@ -3,7 +3,7 @@ import * as p from "@clack/prompts";
 import type { ParsedArgs } from "../args";
 import { loadConfig } from "../config";
 import { assertSubmittable } from "./guards";
-import { runRemoteBuild } from "./remote-build";
+import { runRemoteBuild, optimizeFlagsFrom } from "./remote-build";
 
 export async function runDeploy(args: ParsedArgs): Promise<number> {
   const cfg = loadConfig({ cwd: process.cwd(), overrides: args.flags });
@@ -16,7 +16,7 @@ export async function runDeploy(args: ParsedArgs): Promise<number> {
     const code = await runRemoteBuild({
       cfg, profile, platform,
       submit: true,
-      optimize: args.flags.optimize,
+      optimize: optimizeFlagsFrom(args.flags),
       cache: args.flags.cache,
       dryRun: args.flags.dryRun,
       download: args.flags.download,

@@ -1,7 +1,7 @@
 import * as p from "@clack/prompts";
 import type { ParsedArgs, Platform, Profile } from "../args";
 import { loadConfig } from "../config";
-import { runRemoteBuild } from "./remote-build";
+import { runRemoteBuild, optimizeFlagsFrom } from "./remote-build";
 import { runBuild } from "./build";
 import { runSubmit } from "./submit";
 import { runUpdate } from "./update";
@@ -100,7 +100,7 @@ export async function runInteractive(args: ParsedArgs): Promise<number> {
   const code = await runRemoteBuild({
     cfg, profile, platform,
     submit: action === "deploy",
-    optimize: args.flags.optimize,
+    optimize: optimizeFlagsFrom(args.flags),
     cache: args.flags.cache,
     dryRun: args.flags.dryRun,
   });
