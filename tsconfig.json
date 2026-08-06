@@ -1,11 +1,15 @@
 {
   "compilerOptions": {
+    "lib": ["ESNext"],
     "target": "ESNext",
     "module": "ESNext",
     "moduleResolution": "bundler",
     "types": ["bun"],
     "strict": true,
-    "noEmit": true
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "resolveJsonModule": true
   },
-  "include": ["scripts/**/*.ts"]
+  "include": ["src", "test"]
 }
