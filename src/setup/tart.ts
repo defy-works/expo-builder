@@ -155,7 +155,17 @@ export async function provisionImage(opts: ProvisionOptions): Promise<number> {
         return 0;
       }
     }
+    // Stop first: tart refuses to delete a running VM, and a failed delete
+    // here would surface later as a confusing "already exists" clone error.
+    ssh(target, `tart stop -t 30 ${imageName} 2>/dev/null || true`, { allowFailure: true });
     ssh(target, `tart delete ${imageName}`, { allowFailure: true });
+    if (ssh(target, "tart list --quiet 2>/dev/null || true", { allowFailure: true })
+      .split("\n").some((l) => l.trim() === imageName)) {
+      throw new BuildError(
+        `Could not remove the existing image "${imageName}".`,
+        `Stop and delete it manually on the Mac:\n  tart stop ${imageName}; tart delete ${imageName}`,
+      );
+    }
   }
 
   const pull = p.spinner();
