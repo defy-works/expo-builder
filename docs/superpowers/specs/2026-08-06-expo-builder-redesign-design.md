@@ -292,6 +292,39 @@ Preflight verifies the volume is mounted before every remote build and fails fas
 
 When `tartHome` is on a volume with abundant free space, the constraints in §7 relax automatically — see `vm.keepImages` there.
 
+#### Slimming and cache retention interact
+
+These two decisions, made in separate revisions of this document, partially cancel each other and must be reasoned about together.
+
+Under `clonefile`, deleting a file in the clone does not free blocks that the OCI cache still references. So slimming the provisioned image while retaining the pristine pulled image leaves the removed simulator runtimes alive in the cache, and the union on disk is unchanged. **Slimming only reclaims space when the OCI cache is dropped.**
+
+This also corrects the earlier "retaining the cache costs ~5 GB": that measurement was taken against an unslimmed clone. Against a slimmed clone, retention costs approximately the full slimming saving, ~25 GB.
+
+The resulting trade, per Xcode version:
+
+| Configuration | Disk per version | Rebuild cost |
+|---|---|---|
+| Retain cache + slim | ~92 GB | Free — re-clone, no download |
+| Drop cache + slim | ~67 GB | ~62 GB re-download |
+| Retain cache, no slim | ~92 GB | Free |
+
+Default: **retain the cache and slim anyway.** Slimming costs nothing to perform, and it becomes the operative saving the moment `clean --deep` drops the cache or the cache is evicted under pressure. On internal-only storage where §6's footprint table is binding, `clean --deep` converts the retained configuration into the 67 GB one on demand.
+
+#### Sizing an external volume
+
+Component budget per Xcode version: 80 GB image, ~12 GB provisioning tooling (Android SDK and NDK dominate), sharing extents with the retained cache as above. Add once, not per version: ~25 GB transient build clone at peak, 15 GB shared build cache, and a few GB of artifacts and synced source.
+
+| Volume | Capacity | Assessment |
+|---|---|---|
+| 256 GB | 1 version, ~137 GB peak | Works, no headroom |
+| 500 GB | 2–3 versions | Practical minimum |
+| 1 TB | 3 versions with wide headroom | **Recommended** |
+| 2 TB | — | Unnecessary at current scale |
+
+Recommended configuration: **1 TB NVMe SSD in a USB 3.2 Gen 2 or Thunderbolt enclosure**, formatted APFS with ownership enabled. This accommodates the `keepImages` cap of 3 with room to spare and makes switching Xcode versions instant.
+
+The 80 GB image figure is measured; the ~12 GB tooling and ~25 GB slimming figures are estimates to be replaced with measurements on the first provisioning run.
+
 #### Target footprint
 
 | Item | Budget |
@@ -362,6 +395,8 @@ Because the pristine pulled image is retained (§6), rebuilding is a `clonefile`
 Provisioning **slims the image before freezing it**. This tool only ever produces device and store archives — it never runs a simulator — so the iOS/tvOS/watchOS simulator runtimes shipped in the cirruslabs image are dead weight, as is non-iOS platform support. Provisioning removes them and records the measured before/after size in `~/.expo-builder/image.json`.
 
 The expected saving is 20–35 GB, but that figure is **unverified** — it must be measured on the first provisioning run and this document updated with the real number. The §6 footprint table assumes slimming lands the image near 50 GB; if measurement shows otherwise, the cache budget and retention counts need revisiting.
+
+Note that slimming does not reduce total disk while the OCI cache is retained, since the removed blocks remain referenced by the cache. See "Slimming and cache retention interact" in §6 — the saving is realised when the cache is dropped, not when the files are deleted.
 
 #### Rejected: base image plus self-installed Xcode
 
