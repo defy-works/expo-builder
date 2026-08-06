@@ -1,5 +1,7 @@
 # expo-builder
 
+[![npm](https://img.shields.io/npm/v/@defy-works/expo-builder)](https://www.npmjs.com/package/@defy-works/expo-builder)
+
 Build Expo/React Native apps in ephemeral [Tart](https://tart.run/) VMs on a remote Mac — from any OS (Windows, macOS, or Linux), over SSH.
 
 Every build gets a **fresh macOS VM clone** with Xcode and all dependencies pre-installed. No dependency drift, no stale caches, no Homebrew conflicts. When the build finishes, the VM is deleted.
@@ -8,29 +10,37 @@ Also supports EAS Cloud builds, store submission, OTA updates, and local device 
 
 ## Install
 
-**From git** (no npm publish required — recommended for private use):
+```bash
+bun add -d @defy-works/expo-builder
+```
+
+The command is `expo-builder` regardless of the scope:
+
+```bash
+bunx expo-builder --help
+```
+
+Global install (`bun add -g @defy-works/expo-builder`) and `npm`/`npx` work identically — the package is bundled for Node and has **zero runtime dependencies**, so nothing is compiled on install.
+
+<details>
+<summary>Installing from git or a local checkout</summary>
+
+Track `main` ahead of a release:
 
 ```bash
 bun add -d github:defy-works/expo-builder
 ```
 
-The `prepare` script builds `dist/` on install, so this needs Bun on the installing machine.
+This runs the `prepare` script to build `dist/`, so it needs Bun on the installing machine — unlike the npm package, which ships prebuilt.
 
-**From a local checkout** (for developing expo-builder itself):
+Develop expo-builder itself against a real project:
 
 ```bash
 cd /path/to/expo-builder && bun link
 cd /path/to/your-project  && bun link expo-builder
 ```
 
-**From npm**:
-
-```bash
-bun add -d @defy-works/expo-builder     # or: bun add -g @defy-works/expo-builder
-bunx expo-builder --help    # npx also works
-```
-
-The published package is bundled for Node and has **zero runtime dependencies**, so `bunx`/`npx` starts without an install step.
+</details>
 
 ## Quick start
 
@@ -114,7 +124,7 @@ Resolution reads your SDK from `package.json`, lists available tags from both `m
 
 ## Storage on the Mac
 
-A provisioned image plus its share of the retained base costs roughly **92 GB per Xcode version**. Budget about 25 GB more for a build in flight and up to 15 GB for the shared cache.
+A provisioned image plus its share of the retained base costs **87 GB per Xcode version** (measured, not estimated). Budget about 25 GB more for a build in flight and up to 15 GB for the shared cache — roughly **128 GB at peak** for one Xcode version.
 
 - **The Tart OCI cache is retained, not pruned.** `tart clone` uses APFS `clonefile(2)`, so the pulled base and the local image share disk extents — pruning the cache typically frees only a few GB while costing a ~62 GB re-download on the next rebuild. `clean --deep` prunes it explicitly when you genuinely need the space.
 - **Image slimming.** Provisioning removes simulator runtimes and non-iOS platforms, since this tool only ever produces device and store archives.
@@ -159,11 +169,13 @@ Setting it goes through the Expo GraphQL `createAppVersion` mutation rather than
 ## Migrating from the submodule
 
 ```bash
-git rm -r eas-builder
-bun add -d expo-builder
+git rm -r eas-builder                        # or expo-builder, if already renamed
+bun add -d @defy-works/expo-builder
 bunx expo-builder init
-bunx expo-builder vm rebuild
+bunx expo-builder doctor
 ```
+
+Then replace the script in your `package.json` — `"eas": "bun run expo-builder/scripts/eas.ts"` becomes `"eas": "expo-builder"`. That path no longer exists, so a submodule left in place will break the moment it is updated.
 
 `init` replaces `.env`, and the `.ssh-key/id` copy is no longer needed — your existing `~/.ssh` key is used. The legacy Tart image is detected by `doctor`; renaming it is free thanks to APFS cloning:
 
