@@ -13,7 +13,8 @@ test("package is scoped to the org and exposes an unscoped bin", () => {
   // Scoped so it cannot be mistaken for an official Expo package, while the
   // command itself stays `expo-builder`.
   expect(pkg.name).toBe("@defy-works/expo-builder");
-  expect(pkg.bin["expo-builder"]).toBe("./dist/cli.js");
+  // No "./" prefix: npm normalises it away on publish and warns if present.
+  expect(pkg.bin["expo-builder"]).toBe("dist/cli.js");
 });
 
 test("scoped packages must opt into public access explicitly", () => {

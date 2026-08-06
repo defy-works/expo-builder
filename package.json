@@ -5,7 +5,7 @@
   "license": "MIT",
   "type": "module",
   "bin": {
-    "expo-builder": "./dist/cli.js"
+    "expo-builder": "dist/cli.js"
   },
   "files": [
     "dist",
