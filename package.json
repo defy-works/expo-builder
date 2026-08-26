@@ -1,8 +1,9 @@
 {
-  "name": "@defy-works/expo-builder",
+  "name": "expo-builder",
   "version": "0.2.1",
   "description": "Build Expo/React Native apps in ephemeral Tart VMs on a remote Mac — from any OS",
   "license": "MIT",
+  "keywords": ["expo", "eas", "react-native", "tart", "ios", "macos", "build", "ci", "remote-build", "virtual-machine"],
   "type": "module",
   "bin": {
     "expo-builder": "dist/cli.js"

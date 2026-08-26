@@ -1,6 +1,6 @@
 # expo-builder
 
-[![npm](https://img.shields.io/npm/v/@defy-works/expo-builder)](https://www.npmjs.com/package/@defy-works/expo-builder)
+[![npm](https://img.shields.io/npm/v/expo-builder)](https://www.npmjs.com/package/expo-builder)
 
 Build Expo/React Native apps in ephemeral [Tart](https://tart.run/) VMs on a remote Mac — from any OS (Windows, macOS, or Linux), over SSH.
 
@@ -11,16 +11,16 @@ Also supports EAS Cloud builds, store submission, OTA updates, and local device 
 ## Install
 
 ```bash
-bun add -d @defy-works/expo-builder
+bun add -d expo-builder
 ```
 
-The command is `expo-builder` regardless of the scope:
+Then run it:
 
 ```bash
 bunx expo-builder --help
 ```
 
-Global install (`bun add -g @defy-works/expo-builder`) and `npm`/`npx` work identically — the package is bundled for Node and has **zero runtime dependencies**, so nothing is compiled on install.
+Global install (`bun add -g expo-builder`) and `npm`/`npx` work identically — the package is bundled for Node and has **zero runtime dependencies**, so nothing is compiled on install.
 
 <details>
 <summary>Installing from git or a local checkout</summary>
@@ -66,7 +66,7 @@ Full form:
 
 ```json
 {
-  "$schema": "https://unpkg.com/@defy-works/expo-builder/schema.json",
+  "$schema": "https://unpkg.com/expo-builder/schema.json",
   "mac": {
     "host": "your-mac",
     "user": "you",
@@ -170,7 +170,7 @@ Setting it goes through the Expo GraphQL `createAppVersion` mutation rather than
 
 ```bash
 git rm -r eas-builder                        # or expo-builder, if already renamed
-bun add -d @defy-works/expo-builder
+bun add -d expo-builder
 bunx expo-builder init
 bunx expo-builder doctor
 ```
