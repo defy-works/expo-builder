@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 216 32" width="216" height="32" fill="none" role="img" aria-label="expo-builder">
+  <title>expo-builder</title>
+  <rect x="2" y="2" width="28" height="28" rx="7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="5.5 7" stroke-dashoffset="-4.25" opacity=".4"/>
+  <rect x="10" y="10" width="12" height="12" rx="3.2" fill="currentColor"/>
+  <text x="46" y="22" textLength="167" lengthAdjust="spacingAndGlyphs" fill="currentColor" font-size="24" font-weight="500" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace">expo-builder</text>
+</svg>

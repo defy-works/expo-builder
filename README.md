@@ -1,12 +1,23 @@
-# expo-builder
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+    <img alt="expo-builder" src="assets/logo-light.svg" width="264">
+  </picture>
+</p>
 
-[![npm](https://img.shields.io/npm/v/expo-builder)](https://www.npmjs.com/package/expo-builder)
+<p align="center">
+  <a href="https://www.npmjs.com/package/expo-builder"><img alt="npm" src="https://img.shields.io/npm/v/expo-builder"></a>
+</p>
 
 Build Expo/React Native apps in ephemeral [Tart](https://tart.run/) VMs on a remote Mac — from any OS (Windows, macOS, or Linux), over SSH.
 
 Every build gets a **fresh macOS VM clone** with Xcode and all dependencies pre-installed. No dependency drift, no stale caches, no Homebrew conflicts. When the build finishes, the VM is deleted.
 
 Also supports EAS Cloud builds, store submission, OTA updates, and local device installs — through one CLI.
+
+<p align="center">
+  <img alt="Source is rsynced to the Mac, a Tart VM is cloned for the build, the artifact is copied back, and the VM is deleted" src="assets/producthunt/gallery-2-how-it-works.png" width="860">
+</p>
 
 ## Install
 
@@ -51,6 +62,12 @@ bunx expo-builder vm rebuild # provisions the VM image (first run only)
 
 bunx expo-builder build preview ios --remote
 ```
+
+<p align="center">
+  <img alt="A remote build running: config, xcode, sync, vm, install, env, build, artifact, cleanup" src="assets/producthunt/gallery-3-terminal.png" width="860">
+</p>
+
+<p align="center"><sub>Output above is illustrative.</sub></p>
 
 ## Configuration
 

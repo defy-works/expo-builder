@@ -1,0 +1,27 @@
+<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="base.css">
+<div class="stage">
+  <div class="head">
+    <div class="kicker">How it works</div>
+    <h2>One command. Three hops.<br>Nothing left behind.</h2>
+  </div>
+  <div class="spacer"></div>
+  <div class="flow">
+    <div class="card">
+      <div class="lbl">Your machine</div><div class="name">Windows, Linux, Mac</div>
+      <ul><li>mobile/<span class="d"> &nbsp;source only</span></li><li>eas.json</li><li>app.config.ts</li></ul>
+    </div>
+    <div class="arr"><span>rsync --delete</span><svg width="72" height="10" viewBox="0 0 72 10" fill="none"><path d="M0 5h63" stroke="rgba(242,244,248,.22)" stroke-width="1.5"/><path d="M61 1.2l4 3.8-4 3.8" stroke="rgba(242,244,248,.38)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+    <div class="card">
+      <div class="lbl">The Mac</div><div class="name">Apple Silicon host</div>
+      <ul><li>~/.expo-builder/</li><li>shared dep cache</li><li>retained OCI base</li></ul>
+    </div>
+    <div class="arr"><span>tart clone</span><svg width="72" height="10" viewBox="0 0 72 10" fill="none"><path d="M0 5h63" stroke="rgba(242,244,248,.22)" stroke-width="1.5"/><path d="M61 1.2l4 3.8-4 3.8" stroke="rgba(242,244,248,.38)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+    <div class="card eph">
+      <div class="lbl" style="color:#8B9BFF">Ephemeral VM</div><div class="name">Fresh clone each build</div>
+      <ul><li>Xcode 26.0<span class="d"> &nbsp;auto-picked</span></li><li>eas build --local</li><li>ccache warm</li></ul>
+    </div>
+  </div>
+  <div class="ret"><span class="kicker" style="width:118px;text-align:center">Output</span><span>artifact &rarr; <span style="color:var(--ink)">~/.expo-builder/artifacts/&lt;slug&gt;/app.ipa</span></span></div>
+  <div class="spacer"></div>
+  <div class="note"><b>The VM is deleted on exit</b> &mdash; the cleanup trap is registered before the clone and catches EXIT, INT, TERM and HUP, so a dropped SSH connection cannot leak a running VM.</div>
+</div>
